@@ -78,18 +78,8 @@ struct mp_osd_res {
     double display_par;
 };
 
-enum mp_osdtype {
-    OSDTYPE_SUB,
-    OSDTYPE_SUB2,
-
-    OSDTYPE_PROGBAR,
-    OSDTYPE_OSD,
-
-    OSDTYPE_EXTERNAL,
-    OSDTYPE_EXTERNAL2,
-
-    MAX_OSD_PARTS
-};
+// 0 <= sub_bitmaps.render_index < MAX_OSD_PARTS
+#define MAX_OSD_PARTS 5
 
 // Start of OSD symbols in osd_font.pfb
 #define OSD_CODEPOINTS 0xE000
@@ -117,6 +107,12 @@ enum mp_osd_font_codepoints {
     OSD_PB_1 = 0x13,
 };
 
+
+// Never valid UTF-8, so we expect it's free for use.
+// Specially interpreted by osd_libass.c, in order to allow/escape ASS tags.
+#define OSD_ASS_0 "\xFD"
+#define OSD_ASS_1 "\xFE"
+
 struct osd_style_opts {
     char *font;
     float font_size;
@@ -133,6 +129,7 @@ struct osd_style_opts {
     int align_y;
     float blur;
     int bold;
+    int italic;
 };
 
 extern const struct m_sub_options osd_style_conf;
@@ -141,6 +138,7 @@ extern const struct m_sub_options sub_style_conf;
 struct osd_state;
 struct osd_object;
 struct mpv_global;
+struct dec_sub;
 
 struct osd_state *osd_create(struct mpv_global *global);
 void osd_changed(struct osd_state *osd, int new_value);
@@ -149,14 +147,8 @@ void osd_free(struct osd_state *osd);
 
 bool osd_query_and_reset_want_redraw(struct osd_state *osd);
 
-void osd_set_text(struct osd_state *osd, int obj, const char *text);
-
-struct osd_sub_state {
-    struct dec_sub *dec_sub;
-    double video_offset;
-    bool render_bitmap_subs;
-};
-void osd_set_sub(struct osd_state *osd, int obj, struct osd_sub_state *substate);
+void osd_set_text(struct osd_state *osd, const char *text);
+void osd_set_sub(struct osd_state *osd, int index, struct dec_sub *dec_sub);
 
 bool osd_get_render_subs_in_filter(struct osd_state *osd);
 void osd_set_render_subs_in_filter(struct osd_state *osd, bool s);
@@ -168,8 +160,6 @@ struct osd_progbar_state {
     int num_stops;
 };
 void osd_set_progbar(struct osd_state *osd, struct osd_progbar_state *s);
-
-void osd_set_external(struct osd_state *osd, int res_x, int res_y, char *text);
 
 void osd_set_external2(struct osd_state *osd, struct sub_bitmaps *imgs);
 
@@ -193,16 +183,12 @@ void osd_draw_on_image_p(struct osd_state *osd, struct mp_osd_res res,
                          double video_pts, int draw_flags,
                          struct mp_image_pool *pool, struct mp_image *dest);
 
+void osd_resize(struct osd_state *osd, struct mp_osd_res res);
+
 struct mp_image_params;
 struct mp_osd_res osd_res_from_image_params(const struct mp_image_params *p);
 
-void osd_object_get_scale_factor(struct osd_state *osd, int obj,
-                                 double *sw, double *sh);
-
-void osd_coords_to_video(struct osd_state *osd, int frame_w, int frame_h,
-                         int *x, int *y);
-
-struct mp_osd_res osd_get_vo_res(struct osd_state *osd, int obj);
+struct mp_osd_res osd_get_vo_res(struct osd_state *osd);
 
 void osd_rescale_bitmaps(struct sub_bitmaps *imgs, int frame_w, int frame_h,
                          struct mp_osd_res res, double compensate_par);
@@ -215,13 +201,10 @@ void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
 void osd_init_backend(struct osd_state *osd);
 void osd_destroy_backend(struct osd_state *osd);
 
+void osd_set_external(struct osd_state *osd, void *id, int res_x, int res_y,
+                      char *text);
+
 // doesn't need locking
 void osd_get_function_sym(char *buffer, size_t buffer_size, int osd_function);
-extern const char *const osd_ass_0;
-extern const char *const osd_ass_1;
-
-// defined in backend, but locks if required
-void osd_object_get_resolution(struct osd_state *osd, int obj,
-                               int *out_w, int *out_h);
 
 #endif /* MPLAYER_SUB_H */

@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stddef.h>
@@ -37,6 +37,7 @@ struct priv {
     uint64_t preemption_counter;
     struct mp_image_params image_params;
     GLuint gl_texture;
+    bool vdpgl_initialized;
     GLvdpauSurfaceNV vdpgl_surface;
     VdpOutputSurface vdp_surface;
     struct mp_vdpau_mixer *mixer;
@@ -48,7 +49,6 @@ static void mark_vdpau_objects_uninitialized(struct gl_hwdec *hw)
     struct priv *p = hw->priv;
 
     p->vdp_surface = VDP_INVALID_HANDLE;
-    p->mixer->video_mixer = VDP_INVALID_HANDLE;
     p->mapped = false;
 }
 
@@ -76,15 +76,14 @@ static void destroy_objects(struct gl_hwdec *hw)
     }
     p->vdp_surface = VDP_INVALID_HANDLE;
 
-    glCheckError(gl, hw->log, "Before uninitializing OpenGL interop");
+    gl_check_error(gl, hw->log, "Before uninitializing OpenGL interop");
 
-    gl->VDPAUFiniNV();
+    if (p->vdpgl_initialized)
+        gl->VDPAUFiniNV();
 
-    // If the GL/vdpau state is not initialized, above calls raises an error.
-    while (1) {
-        if (gl->GetError() == GL_NO_ERROR)
-            break;
-    }
+    p->vdpgl_initialized = false;
+
+    gl_check_error(gl, hw->log, "After uninitializing OpenGL interop");
 }
 
 static void destroy(struct gl_hwdec *hw)
@@ -93,14 +92,14 @@ static void destroy(struct gl_hwdec *hw)
 
     destroy_objects(hw);
     mp_vdpau_mixer_destroy(p->mixer);
+    if (p->ctx)
+        hwdec_devices_remove(hw->devs, &p->ctx->hwctx);
     mp_vdpau_destroy(p->ctx);
 }
 
 static int create(struct gl_hwdec *hw)
 {
     GL *gl = hw->gl;
-    if (hw->hwctx)
-        return -1;
     Display *x11disp = glXGetCurrentDisplay();
     if (!x11disp)
         return -1;
@@ -120,8 +119,8 @@ static int create(struct gl_hwdec *hw)
         destroy(hw);
         return -1;
     }
-    hw->hwctx = &p->ctx->hwctx;
-    hw->converted_imgfmt = IMGFMT_RGB0;
+    p->ctx->hwctx.driver_name = hw->driver->name;
+    hwdec_devices_add(hw->devs, &p->ctx->hwctx);
     return 0;
 }
 
@@ -137,10 +136,12 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
     assert(params->imgfmt == hw->driver->imgfmt);
     p->image_params = *params;
 
-    if (mp_vdpau_handle_preemption(p->ctx, &p->preemption_counter) < 1)
+    if (mp_vdpau_handle_preemption(p->ctx, &p->preemption_counter) < 0)
         return -1;
 
     gl->VDPAUInitNV(BRAINDEATH(p->ctx->vdp_device), p->ctx->get_proc_address);
+
+    p->vdpgl_initialized = true;
 
     vdp_st = vdp->output_surface_create(p->ctx->vdp_device,
                                         VDP_RGBA_FORMAT_B8G8R8A8,
@@ -163,18 +164,18 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
 
     gl->VDPAUSurfaceAccessNV(p->vdpgl_surface, GL_READ_ONLY);
 
-    glCheckError(gl, hw->log, "After initializing vdpau OpenGL interop");
+    gl_check_error(gl, hw->log, "After initializing vdpau OpenGL interop");
+
+    params->imgfmt = IMGFMT_RGB0;
 
     return 0;
 }
 
-static int map_image(struct gl_hwdec *hw, struct mp_image *hw_image,
-                     GLuint *out_textures)
+static int map_frame(struct gl_hwdec *hw, struct mp_image *hw_image,
+                     struct gl_hwdec_frame *out_frame)
 {
     struct priv *p = hw->priv;
     GL *gl = hw->gl;
-
-    assert(hw_image && hw_image->imgfmt == IMGFMT_VDPAU);
 
     int pe = mp_vdpau_handle_preemption(p->ctx, &p->preemption_counter);
     if (pe < 1) {
@@ -188,22 +189,40 @@ static int map_image(struct gl_hwdec *hw, struct mp_image *hw_image,
     if (!p->vdpgl_surface)
         return -1;
 
-    if (p->mapped)
-        gl->VDPAUUnmapSurfacesNV(1, &p->vdpgl_surface);
-
     mp_vdpau_mixer_render(p->mixer, NULL, p->vdp_surface, NULL, hw_image, NULL);
 
     gl->VDPAUMapSurfacesNV(1, &p->vdpgl_surface);
     p->mapped = true;
-    out_textures[0] = p->gl_texture;
+    *out_frame = (struct gl_hwdec_frame){
+        .planes = {
+            {
+                .gl_texture = p->gl_texture,
+                .gl_target = GL_TEXTURE_2D,
+                .tex_w = p->image_params.w,
+                .tex_h = p->image_params.h,
+            },
+        },
+    };
     return 0;
 }
 
+static void unmap(struct gl_hwdec *hw)
+{
+    struct priv *p = hw->priv;
+    GL *gl = hw->gl;
+
+    if (p->mapped)
+        gl->VDPAUUnmapSurfacesNV(1, &p->vdpgl_surface);
+    p->mapped = false;
+}
+
 const struct gl_hwdec_driver gl_hwdec_vdpau = {
-    .api_name = "vdpau",
+    .name = "vdpau-glx",
+    .api = HWDEC_VDPAU,
     .imgfmt = IMGFMT_VDPAU,
     .create = create,
     .reinit = reinit,
-    .map_image = map_image,
+    .map_frame = map_frame,
+    .unmap = unmap,
     .destroy = destroy,
 };

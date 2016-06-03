@@ -37,6 +37,10 @@ LIRC support - configure remotes as input devices instead).
 
 See the ``--input-`` options for ways to customize it.
 
+The following listings are not necessarily complete. See ``etc/input.conf`` for
+a list of default bindings. User ``input.conf`` files and Lua scripts can
+define additional key bindings.
+
 Keyboard Control
 ----------------
 
@@ -50,7 +54,7 @@ UP and DOWN
 
 Ctrl+LEFT and Ctrl+RIGHT
     Seek to the previous/next subtitle. Subject to some restrictions and
-    might not work always; see ``sub_seek`` command.
+    might not always work; see ``sub-seek`` command.
 
 [ and ]
     Decrease/increase current playback speed by 10%.
@@ -128,7 +132,7 @@ x and z
     Adjust subtitle delay by +/- 0.1 seconds.
 
 l
-    Set/clear A-B loop points. See ``ab_loop`` command for details.
+    Set/clear A-B loop points. See ``ab-loop`` command for details.
 
 L
     Toggle infinite looping.
@@ -192,23 +196,19 @@ corresponding adjustment, or the software equalizer (``--vf=eq``).)
 7 and 8
     Adjust saturation.
 
-(The following keys are valid only on OS X.)
-
-command + 0
+Alt+0 (and command+0 on OSX)
     Resize video window to half its original size.
-    (On other platforms, you can bind keys to change the ``window-scale``
-    property.)
 
-command + 1
+Alt+1 (and command+1 on OSX)
     Resize video window to its original size.
 
-command + 2
+Alt+2 (and command+2 on OSX)
     Resize video window to double its original size.
 
-command + f
+command + f (OSX only)
     Toggle fullscreen (see also ``--fs``).
 
-command + [ and command + ]
+command + [ and command + ] (OSX only)
     Set video window alpha.
 
 (The following keys are valid if you have a keyboard with multimedia keys.)
@@ -226,7 +226,10 @@ PREVIOUS and NEXT
 support.)
 
 h and k
-    Select previous/next channel.
+    Select previous/next tv-channel.
+
+H and K
+    Select previous/next dvb-channel.
 
 Mouse Control
 -------------
@@ -262,7 +265,7 @@ parser puts several options into a single string, and passes them to a
 component at once, instead of using multiple options on the level of the
 command line.
 
-The suboption parser can quote strings with ``"``, ``'``, and ``[...]``.
+The suboption parser can quote strings with ``"`` and ``[...]``.
 Additionally, there is a special form of quoting with ``%n%`` described below.
 
 For example, the ``opengl`` VO can take multiple options:
@@ -317,10 +320,21 @@ example, paths starting with ``-`` will be interpreted as options. Likewise,
 if a path contains the sequence ``://``, the string before that might be
 interpreted as protocol prefix, even though ``://`` can be part of a legal
 UNIX path. To avoid problems with arbitrary paths, you should be sure that
-absolute paths passed to mpv start with ``/``, and relative paths with ``./``.
+absolute paths passed to mpv start with ``/``, and prefix relative paths with
+``./``.
+
+Using the ``file://`` pseudo-protocol is discouraged, because it involves
+strange URL unescaping rules.
 
 The name ``-`` itself is interpreted as stdin, and will cause mpv to disable
 console controls. (Which makes it suitable for playing data piped to stdin.)
+
+The special argument ``--`` can be used to stop mpv from interpreting the
+following arguments as options.
+
+When using the client API, you should strictly avoid using ``mpv_command_string``
+for invoking the ``loadfile`` command, and instead prefer e.g. ``mpv_command``
+to avoid the need for filename escaping.
 
 For paths passed to suboptions, the situation is further complicated by the
 need to escape special characters. To work this around, the path can be
@@ -382,6 +396,45 @@ file stops playing. If option ``--c`` is changed during playback of
 ``file2.mkv``, it is reset when advancing to ``file3.mkv``. This only affects
 file-local options. The option ``--a`` is never reset here.
 
+
+Playing DVDs
+------------
+
+DVDs can be played with the ``dvd://[title]`` syntax. The optional
+title specifier is a number which selects between separate video
+streams on the DVD. If no title is given (``dvd://``) then the longest
+title is selected automatically by the library. This is usually what
+you want. mpv does not support DVD menus.
+
+DVDs which have been copied on to a hard drive or other mounted
+filesystem (by e.g. the ``dvdbackup`` tool) are accommodated by
+specifying the path to the local copy: ``--dvd-device=PATH``.
+Alternatively, running ``mpv PATH`` should auto-detect a DVD directory
+tree and play the longest title.
+
+.. note::
+
+    mpv uses a different default DVD library than MPlayer. MPlayer
+    uses libdvdread by default, and mpv uses libdvdnav by default.
+    Both libraries are developed in parallel, but libdvdnav is
+    intended to support more sophisticated DVD features such as menus
+    and multi-angle playback. mpv uses libdvdnav for files specified
+    as either ``dvd://...`` or ``dvdnav://...``. To use libdvdread,
+    which will produce behavior more like MPlayer, specify
+    ``dvdread://...`` instead. Some users have experienced problems
+    when using libdvdnav, in which playback gets stuck in a DVD menu
+    stream. These problems are reported to go away when auto-selecting
+    the title (``dvd://`` rather than ``dvd://1``) or when using
+    libdvdread (e.g. ``dvdread://0``).
+
+    DVDs use image-based subtitles. Image subtitles are implemented as
+    a bitmap video stream which can be superimposed over the main
+    movie. mpv's subtitle styling and positioning options and keyboard
+    shortcuts generally do not work with image-based subtitles.
+    Exceptions include options like ``--stretch-dvd-subs`` and 
+    ``--stretch-image-subs-to-screen``.
+
+
 CONFIGURATION FILES
 ===================
 
@@ -414,7 +467,7 @@ Escaping spaces and special characters
 
 This is done like with command line options. The shell is not involved here,
 but option values still need to be quoted as a whole if it contains certain
-characters like spaces. A config entry can be quoted with ``"`` and ``'``,
+characters like spaces. A config entry can be quoted with ``"``,
 as well as with the fixed-length syntax (``%n%``) mentioned before. This is like
 passing the exact contents of the quoted string as command line option. C-style
 escapes are currently _not_ interpreted on this level, although some options do
@@ -524,8 +577,9 @@ TAKING SCREENSHOTS
 
 Screenshots of the currently played file can be taken using the 'screenshot'
 input mode command, which is by default bound to the ``s`` key. Files named
-``shotNNNN.jpg`` will be saved in the working directory, using the first
-available number - no files will be overwritten.
+``mpv-shotNNNN.jpg`` will be saved in the working directory, using the first
+available number - no files will be overwritten. In pseudo-GUI mode, the
+screenshot will be saved somewhere else. See `PSEUDO GUI MODE`_.
 
 A screenshot will usually contain the unscaled video contents at the end of the
 video filter chain and subtitles. By default, ``S`` takes screenshots without
@@ -566,14 +620,16 @@ listed.
   this will indicate a problem. (``total-avsync-change`` property.)
 - Encoding state in ``{...}``, only shown in encoding mode.
 - Display sync state. If display sync is active (``display-sync-active``
-  property), this shows ``DS: 12/13``, where the first number is the number of
-  frames where a vsync was intentionally added or removed
-  (``mistimed-frame-count``), and the second number of estimated number of vsyncs
-  which took too long (``vo-delayed-frame-count`` property). The latter is a
-  heuristic, as it's generally not possible to determine this with certainty.
+  property), this shows ``DS: 2.500/13``, where the first number is average
+  number of vsyncs per video frame (e.g. 2.5 when playing 24Hz videos on 60Hz
+  screens), which might jitter if the ratio doesn't round off, or there are
+  mistimed frames (``vsync-ratio``), and the second number of estimated number
+  of vsyncs which took too long (``vo-delayed-frame-count`` property). The
+  latter is a heuristic, as it's generally not possible to determine this with
+  certainty.
 - Dropped frames, e.g. ``Dropped: 4``. Shows up only if the count is not 0. Can
   grow if the video framerate is higher than that of the display, or if video
-  rendering is too slow. Also can be incremented on "hiccups" and when the video
+  rendering is too slow. May also be incremented on "hiccups" and when the video
   frame couldn't be displayed on time. (``vo-drop-frame-count`` property.)
   If the decoder drops frames, the number of decoder-dropped frames is appended
   to the display as well, e.g.: ``Dropped: 4/34``. This happens only if
@@ -604,7 +660,7 @@ PROTOCOLS
     Play a path from  Samba share.
 
 ``bd://[title][/device]`` ``--bluray-device=PATH``
-    Play a Blu-Ray disc. Currently, this does not accept ISO files. Instead,
+    Play a Blu-ray disc. Currently, this does not accept ISO files. Instead,
     you must mount the ISO file as filesystem, and point ``--bluray-device``
     to the mounted directory directly.
 
@@ -656,18 +712,22 @@ PROTOCOLS
     absolute path.
 
 ``fd://123``
-    Read data from the given UNIX FD (for example 123). This is similar to
-    piping data to stdin via ``-``, but can use an arbitrary file descriptor.
-    Will not work correctly on MS Windows.
+    Read data from the given file descriptor (for example 123). This is similar
+    to piping data to stdin via ``-``, but can use an arbitrary file descriptor.
 
 ``edl://[edl specification as in edl-mpv.rst]``
     Stitch together parts of multiple files and play them.
 
 ``null://``
-    Simulate an empty file.
+    Simulate an empty file. If opened for writing, it will discard all data.
+    The ``null`` demuxer will specifically pass autoprobing if this protocol
+    is used (while it's not automatically invoked for empty files).
 
 ``memory://data``
     Use the ``data`` part as source data.
+
+``hex://data``
+    Like ``memory://``, but the string is interpreted as hexdump.
 
 PSEUDO GUI MODE
 ===============
@@ -730,7 +790,7 @@ EMBEDDING INTO OTHER PROGRAMS (LIBMPV)
 ======================================
 
 mpv can be embedded into other programs as video/audio playback backend. The
-recommended way to to so is using libmpv. See ``libmpv/client.h`` in the mpv
+recommended way to do so is using libmpv. See ``libmpv/client.h`` in the mpv
 source code repository. This provides a C API. Bindings for other languages
 might be available (see wiki).
 
@@ -751,9 +811,6 @@ behavior of mpv.
     If set, XDG-style system configuration directories are used. Otherwise,
     the UNIX convention (``PREFIX/etc/mpv/``) is used.
 
-``TERM``
-    Used to determine terminal type.
-
 ``MPV_HOME``
     Directory where mpv looks for user settings. Overrides ``HOME``, and mpv
     will try to load the config file as ``$MPV_HOME/mpv.conf``.
@@ -764,8 +821,7 @@ behavior of mpv.
     of ``--v`` options passed to the command line.
 
 ``MPV_LEAK_REPORT``
-    If set to ``1``, enable internal talloc leak reporting. Note that this can
-    cause trouble with multithreading, so only developers should use this.
+    If set to ``1``, enable internal talloc leak reporting.
 
 ``LADSPA_PATH``
     Specifies the search path for LADSPA plugins. If it is unset, fully
@@ -805,7 +861,7 @@ libdvdcss:
 
         key
            is the default method. libdvdcss will use a set of calculated
-           player keys to try and get the disc key. This can fail if the drive
+           player keys to try to get the disc key. This can fail if the drive
            does not recognize any of the player keys.
 
         disc
@@ -921,7 +977,7 @@ locations are different. They are generally located under ``%APPDATA%/mpv/``.
 For example, the path to mpv.conf is ``%APPDATA%/mpv/mpv.conf``, which maps to
 a system and user-specific path, for example
 
-    ``C:\users\USERNAME\Application Data\mpv\mpv.conf``
+    ``C:\users\USERNAME\AppData\Roaming\mpv\mpv.conf``
 
 You can find the exact path by running ``echo %APPDATA%\mpv\mpv.conf`` in cmd.exe.
 
@@ -944,8 +1000,8 @@ lower priority. Some config files are loaded only once, which means that
 e.g. of 2 ``input.conf`` files located in two config directories, only the
 one from the directory with higher priority will be loaded.
 
-A third config directory with lowest priority is the directory named ``mpv``
-in the same directory as ``mpv.exe``. This used to be the directory with
+A third config directory with the lowest priority is the directory named ``mpv``
+in the same directory as ``mpv.exe``. This used to be the directory with the
 highest priority, but is now discouraged to use and might be removed in the
 future.
 

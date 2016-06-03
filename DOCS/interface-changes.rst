@@ -1,7 +1,7 @@
 Introduction
 ============
 
-mpv provides access to its internal via the following means:
+mpv provides access to its internals via the following means:
 
 - options
 - commands
@@ -19,8 +19,61 @@ Interface changes
 
 ::
 
+ --- mpv 0.17.1 ---
+    - now ab-loops are active even if one of the "ab-loop-a"/"-b" properties is
+      unset ("no"), in which case the start of the file is used if the A loop
+      point is unset, and the end of the file for an unset B loop point
+    - deprecate --sub-ass=no option by --ass-style-override=strip
+      (also needs --embeddedfonts=no)
+    - add "hwdec-interop" and "hwdec-current" properties
+    - deprecated "hwdec-active" and "hwdec-detected" properties (to be removed
+      in mpv 0.19.0)
+    - choice option/property values that are "yes" or "no" will now be returned
+      as booleans when using the mpv_node functions in the client API, the
+      "native" property accessors in Lua, and the JSON API. They can be set as
+      such as well.
+    - the VO opengl fbo-format sub-option does not accept "rgb" or "rgba"
+      anymore
+ --- mpv 0.17.0 ---
+    - deprecate "track-list/N/audio-channels" property (use
+      "track-list/N/demux-channel-count" instead)
+    - remove write access to "stream-pos", and change semantics for read access
+    - Lua scripts now don't suspend mpv by default while script code is run
+    - add "cache-speed" property
+    - rename --input-unix-socket to --input-ipc-server, and make it work on
+      Windows too
+    - change the exact behavior of the "video-zoom" property
+    - --video-unscaled no longer disables --video-zoom and --video-aspect
+      To force the old behavior, set --video-zoom=0 and --video-aspect=0
+ --- mpv 0.16.0 ---
+    - change --audio-channels default to stereo (use --audio-channels=auto to
+      get the old default)
+    - add --audio-normalize-downmix
+    - change the default downmix behavior (--audio-normalize-downmix=yes to get
+      the old default)
+    - VO opengl custom shaders must now use "sample_pixel" as function name,
+      instead of "sample"
+    - change VO opengl scaler-resizes-only default to enabled
+    - add VO opengl "interpolation-threshold" suboption (introduces new default
+      behavior, which can change e.g. ``--video-sync=display-vdrop`` to the
+      worse, but is usually what you want)
+    - make "volume" and "mute" properties changeable even if no audio output is
+      active (this gives not-ideal behavior if --softvol=no is used)
+    - add "volume-max" and "mixer-active" properties
+    - ignore --input-cursor option for events injected by input commands like
+      "mouse", "keydown", etc.
+ --- mpv 0.15.0 ---
+    - change "yadif" video filter defaults
  --- mpv 0.14.0 ---
-    - add "vsync-ratio" property
+    - vo_opengl interpolation now requires --video-sync=display-... to be set
+    - change some vo_opengl defaults (including changing tscale)
+    - add "vsync-ratio", "estimated-display-fps" properties
+    - add --rebase-start-time option
+      This is a breaking change to start time handling. Instead of making start
+      time handling an aspect of different options and properties (like
+      "time-pos" vs. "playback-time"), make it dependent on the new option. For
+      compatibility, the "time-start" property now always returns 0, so code
+      which attempted to handle rebasing manually will not break.
  --- mpv 0.13.0 ---
     - remove VO opengl-cb frame queue suboptions (no replacement)
  --- mpv 0.12.0 ---

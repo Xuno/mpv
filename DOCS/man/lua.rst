@@ -192,13 +192,14 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     Register callback to be run on a key binding. The binding will be mapped to
     the given ``key``, which is a string describing the physical key. This uses
     the same key names as in input.conf, and also allows combinations
-    (e.g. ``ctrl+a``).
+    (e.g. ``ctrl+a``). If the key is empty or ``nil``, no physical key is
+    registered, but the user still can create own bindings (see below).
 
     After calling this function, key presses will cause the function ``fn`` to
     be called (unless the user remapped the key with another binding).
 
     The ``name`` argument should be a short symbolic string. It allows the user
-    to remap the key binding via input.conf using the ``script_message``
+    to remap the key binding via input.conf using the ``script-message``
     command, and the name of the key binding (see below for
     an example). The name should be unique across other bindings in the same
     script - if not, the previous binding with the same name will be
@@ -220,8 +221,8 @@ The ``mp`` module is preloaded, although it can be loaded manually with
             has an ``is_mouse`` entry, which tells whether the event was caused
             by a mouse button.
 
-    Internally, key bindings are dispatched via the ``script_message_to`` or
-    ``script_binding`` input commands and ``mp.register_script_message``.
+    Internally, key bindings are dispatched via the ``script-message-to`` or
+    ``script-binding`` input commands and ``mp.register_script_message``.
 
     Trying to map multiple commands to a key will essentially prefer a random
     binding, while the other bindings are not called. It is guaranteed that
@@ -244,7 +245,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
 
     ::
 
-        y script_binding something
+        y script-binding something
 
 
     This will print the message when the key ``y`` is pressed. (``x`` will
@@ -255,7 +256,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
 
     ::
 
-        y script_binding fooscript.something
+        y script-binding fooscript/something
 
 ``mp.add_forced_key_binding(...)``
     This works almost the same as ``mp.add_key_binding``, but registers the
@@ -349,6 +350,10 @@ The ``mp`` module is preloaded, although it can be loaded manually with
             with ``add_timeout()``), this starts the timer from the beginning,
             using the initially configured timeout.
 
+        ``is_enabled()``
+            Whether the timer is currently enabled or was previously disabled
+            (e.g. by ``stop()`` or ``kill()``).
+
         ``timeout`` (RW)
             This field contains the current timeout period. This value is not
             updated as time progresses. It's only used to calculate when the
@@ -389,7 +394,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
 ``mp.get_script_name()``
     Return the name of the current script. The name is usually made of the
     filename of the script, with directory and file extension removed. If
-    there are several script which would have the same name, it's made unique
+    there are several scripts which would have the same name, it's made unique
     by appending a number.
 
     .. admonition:: Example
@@ -412,7 +417,7 @@ are useful only in special situations.
     from displaying the next video frame, so that you don't get blocked when
     trying to access the player.
 
-    This is automatically called by the event handler.
+    Before mpv 0.17.0, this was automatically called by the event handler.
 
 ``mp.resume()``
     Undo one ``mp.suspend()`` call. ``mp.suspend()`` increments an internal
@@ -422,10 +427,6 @@ are useful only in special situations.
 ``mp.resume_all()``
     This resets the internal suspend counter and resumes the player. (It's
     like calling ``mp.resume()`` until the player is actually resumed.)
-
-    You might want to call this if you're about to do something that takes a
-    long time, but doesn't really need access to the player (like a network
-    operation). Note that you still can access the player at any time.
 
 ``mp.get_wakeup_pipe()``
     Calls ``mpv_get_wakeup_pipe()`` and returns the read end of the wakeup
@@ -449,8 +450,6 @@ are useful only in special situations.
     ``mp.get_wakeup_pipe()`` if you're interested in properly working
     notification of new events and working timers.
 
-    This function calls ``mp.suspend()`` and ``mp.resume_all()`` on its own.
-
 ``mp.enable_messages(level)``
     Set the minimum log level of which mpv message output to receive. These
     messages are normally printed to the terminal. By calling this function,
@@ -459,9 +458,9 @@ are useful only in special situations.
     The level is a string, see ``msg.log`` for allowed log levels.
 
 ``mp.register_script_message(name, fn)``
-    This is a helper to dispatch ``script_message`` or ``script_message_to``
-    invocations to Lua functions. ``fn`` is called if ``script_message`` or
-    ``script_message_to`` (with this script as destination) is run
+    This is a helper to dispatch ``script-message`` or ``script-message-to``
+    invocations to Lua functions. ``fn`` is called if ``script-message`` or
+    ``script-message-to`` (with this script as destination) is run
     with ``name`` as first parameter. The other parameters are passed to ``fn``.
     If a message with the given name is already registered, it's overwritten.
 

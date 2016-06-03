@@ -7,28 +7,18 @@
  *
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * You can alternatively redistribute this file and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- */
-
-/**
- * \file gl_common.c
- * \brief OpenGL helper functions used by vo_gl.c and vo_gl2.c
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stddef.h>
@@ -38,11 +28,9 @@
 #include <stdbool.h>
 #include <math.h>
 #include <assert.h>
-#include "talloc.h"
+
 #include "common.h"
 #include "common/common.h"
-#include "options/options.h"
-#include "options/m_option.h"
 
 // This guesses if the current GL context is a suspected software renderer.
 static bool is_software_gl(GL *gl)
@@ -84,6 +72,8 @@ struct gl_functions {
     int provides;               // bitfield of MPGL_CAP_* constants
     int ver_core;               // introduced as required function
     int ver_es_core;            // introduced as required GL ES function
+    int ver_exclude;            // not applicable to versions >= ver_exclude
+    int ver_es_exclude;         // same for GLES
     const struct gl_function *functions;
 };
 
@@ -154,15 +144,22 @@ static const struct gl_functions gl_functions[] = {
     // GL 2.1+ desktop only (and GLSL 120 shaders)
     {
         .ver_core = 210,
-        .provides = MPGL_CAP_ROW_LENGTH | MPGL_CAP_1D_TEX | MPGL_CAP_3D_TEX,
+        .provides = MPGL_CAP_ROW_LENGTH | MPGL_CAP_1D_TEX,
         .functions = (const struct gl_function[]) {
-            DEF_FN(DrawBuffer),
             DEF_FN(GetTexLevelParameteriv),
-            DEF_FN(MapBuffer),
             DEF_FN(ReadBuffer),
             DEF_FN(TexImage1D),
-            DEF_FN(TexImage3D),
             DEF_FN(UnmapBuffer),
+            {0}
+        },
+    },
+    // GL 2.1 has this as extension only.
+    {
+        .ver_exclude = 300,
+        .ver_es_exclude = 300,
+        .extension = "GL_ARB_map_buffer_range",
+        .functions = (const struct gl_function[]) {
+            DEF_FN(MapBufferRange),
             {0}
         },
     },
@@ -174,10 +171,27 @@ static const struct gl_functions gl_functions[] = {
             DEF_FN(BindBufferBase),
             DEF_FN(BlitFramebuffer),
             DEF_FN(GetStringi),
+            DEF_FN(MapBufferRange),
             // for ES 3.0
-            DEF_FN(GetTexLevelParameteriv),
             DEF_FN(ReadBuffer),
             DEF_FN(UnmapBuffer),
+            {0}
+        },
+    },
+    // For ES 3.1 core
+    {
+        .ver_es_core = 310,
+        .functions = (const struct gl_function[]) {
+            DEF_FN(GetTexLevelParameteriv),
+            {0}
+        },
+    },
+    {
+        .ver_core = 210,
+        .ver_es_core = 300,
+        .provides = MPGL_CAP_3D_TEX,
+        .functions = (const struct gl_function[]) {
+            DEF_FN(TexImage3D),
             {0}
         },
     },
@@ -216,13 +230,6 @@ static const struct gl_functions gl_functions[] = {
             {0}
         }
     },
-    // Float textures, extension in GL 2.x, core in GL 3.x core.
-    {
-        .ver_core = 300,
-        .ver_es_core = 300,
-        .extension = "GL_ARB_texture_float",
-        .provides = MPGL_CAP_FLOAT_TEX,
-    },
     // GL_RED / GL_RG textures, extension in GL 2.x, core in GL 3.x core.
     {
         .ver_core = 300,
@@ -231,12 +238,46 @@ static const struct gl_functions gl_functions[] = {
         .provides = MPGL_CAP_TEX_RG,
     },
     {
+        .ver_core = 300,
+        .ver_es_core = 300,
+        .extension = "GL_EXT_texture_rg",
+        .provides = MPGL_CAP_TEX_RG,
+    },
+    // GL_R16 etc.
+    {
+        .extension = "GL_EXT_texture_norm16",
+        .provides = MPGL_CAP_EXT16,
+        .ver_exclude = 1, // never in desktop GL
+    },
+    // Float texture support for GL 2.x
+    {
+        .extension = "GL_ARB_texture_float",
+        .provides = MPGL_CAP_ARB_FLOAT,
+        .ver_exclude = 300,
+        .ver_es_exclude = 1,
+    },
+    // 16 bit float textures that can be rendered to in GLES
+    {
+        .extension = "GL_EXT_color_buffer_half_float",
+        .provides = MPGL_CAP_EXT_CR_HFLOAT,
+        .ver_exclude = 1,
+        .ver_es_exclude = 320,
+    },
+    {
         .ver_core = 320,
         .extension = "GL_ARB_sync",
         .functions = (const struct gl_function[]) {
             DEF_FN(FenceSync),
             DEF_FN(ClientWaitSync),
             DEF_FN(DeleteSync),
+            {0}
+        },
+    },
+    {
+        .ver_core = 430,
+        .ver_es_core = 300,
+        .functions = (const struct gl_function[]) {
+            DEF_FN(InvalidateFramebuffer),
             {0}
         },
     },
@@ -281,6 +322,22 @@ static const struct gl_functions gl_functions[] = {
             {0}
         },
     },
+#if HAVE_GL_DXINTEROP
+    {
+        .extension = "WGL_NV_DX_interop",
+        .provides = MPGL_CAP_DXINTEROP,
+        .functions = (const struct gl_function[]) {
+            DEF_FN_NAME(DXSetResourceShareHandleNV, "wglDXSetResourceShareHandleNV"),
+            DEF_FN_NAME(DXOpenDeviceNV, "wglDXOpenDeviceNV"),
+            DEF_FN_NAME(DXCloseDeviceNV, "wglDXCloseDeviceNV"),
+            DEF_FN_NAME(DXRegisterObjectNV, "wglDXRegisterObjectNV"),
+            DEF_FN_NAME(DXUnregisterObjectNV, "wglDXUnregisterObjectNV"),
+            DEF_FN_NAME(DXLockObjectsNV, "wglDXLockObjectsNV"),
+            DEF_FN_NAME(DXUnlockObjectsNV, "wglDXUnlockObjectsNV"),
+            {0}
+        },
+    },
+#endif
     // Apple Packed YUV Formats
     // For gl_hwdec_vda.c
     // http://www.opengl.org/registry/specs/APPLE/rgb_422.txt
@@ -318,10 +375,18 @@ static const struct gl_functions gl_functions[] = {
     // uniform buffer object extensions, requires OpenGL 3.1.
     {
         .ver_core = 310,
+        .ver_es_core = 300,
         .extension = "GL_ARB_uniform_buffer_object",
         .functions = (const struct gl_function[]) {
             DEF_FN(GetUniformBlockIndex),
             DEF_FN(UniformBlockBinding),
+            {0}
+        },
+    },
+    {
+        .extension = "GL_ANGLE_translated_shader_source",
+        .functions = (const struct gl_function[]) {
+            DEF_FN(GetTranslatedShaderSourceANGLE),
             {0}
         },
     },
@@ -335,11 +400,9 @@ static const struct gl_functions gl_functions[] = {
 
 // Fill the GL struct with function pointers and extensions from the current
 // GL context. Called by the backend.
-// getProcAddress: function to resolve function names, may be NULL
+// get_fn: function to resolve function names
 // ext2: an extra extension string
 // log: used to output messages
-// Note: if you create a CONTEXT_FORWARD_COMPATIBLE_BIT_ARB with OpenGL 3.0,
-//       you must append "GL_ARB_compatibility" to ext2.
 void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
                           void *fn_ctx, const char *ext2, struct mp_log *log)
 {
@@ -356,8 +419,10 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
 
     int major = 0, minor = 0;
     const char *version_string = gl->GetString(GL_VERSION);
-    if (!version_string)
+    if (!version_string) {
+        mp_fatal(log, "glGetString(GL_VERSION) returned NULL.\n");
         goto error;
+    }
     mp_verbose(log, "GL_VERSION='%s'\n",  version_string);
     if (strncmp(version_string, "OpenGL ES ", 10) == 0) {
         version_string += 10;
@@ -413,6 +478,13 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
         // NOTE: Function entrypoints can exist, even if they do not work.
         //       We must always check extension strings and versions.
 
+        if (gl->version && section->ver_exclude &&
+            gl->version >= section->ver_exclude)
+            continue;
+        if (gl->es && section->ver_es_exclude &&
+            gl->es >= section->ver_es_exclude)
+            continue;
+
         bool exists = false, must_exist = false;
         if (ver_core)
             must_exist = version >= ver_core;
@@ -454,8 +526,8 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
                 if (loaded[i])
                     *funcptr = loaded[i];
             }
-            mp_verbose(log, "Loaded functions for %d/%s.\n", ver_core,
-                       section->extension ? section->extension : "builtin");
+            if (!must_exist && section->extension)
+                mp_verbose(log, "Loaded extension %s.\n", section->extension);
         }
     }
 
@@ -468,7 +540,7 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
     } else {
         gl->glsl_version = 110;
         int glsl_major = 0, glsl_minor = 0;
-        if (sscanf(shader, "%d.%d", &glsl_major, &glsl_minor) == 2)
+        if (shader && sscanf(shader, "%d.%d", &glsl_major, &glsl_minor) == 2)
             gl->glsl_version = glsl_major * 100 + glsl_minor;
         // GLSL 400 defines "sample" as keyword - breaks custom shaders.
         gl->glsl_version = MPMIN(gl->glsl_version, 330);
@@ -500,170 +572,4 @@ void mpgl_load_functions(GL *gl, void *(*getProcAddress)(const GLubyte *),
                          const char *ext2, struct mp_log *log)
 {
     mpgl_load_functions2(gl, get_procaddr_wrapper, getProcAddress, ext2, log);
-}
-
-extern const struct mpgl_driver mpgl_driver_x11;
-extern const struct mpgl_driver mpgl_driver_x11egl;
-extern const struct mpgl_driver mpgl_driver_drm_egl;
-extern const struct mpgl_driver mpgl_driver_cocoa;
-extern const struct mpgl_driver mpgl_driver_wayland;
-extern const struct mpgl_driver mpgl_driver_w32;
-extern const struct mpgl_driver mpgl_driver_rpi;
-
-static const struct mpgl_driver *const backends[] = {
-#if HAVE_RPI
-    &mpgl_driver_rpi,
-#endif
-#if HAVE_GL_COCOA
-    &mpgl_driver_cocoa,
-#endif
-#if HAVE_GL_WIN32
-    &mpgl_driver_w32,
-#endif
-#if HAVE_GL_WAYLAND
-    &mpgl_driver_wayland,
-#endif
-#if HAVE_EGL_X11
-    &mpgl_driver_x11egl,
-#endif
-#if HAVE_EGL_DRM
-    &mpgl_driver_drm_egl,
-#endif
-#if HAVE_GL_X11
-    &mpgl_driver_x11,
-#endif
-};
-
-int mpgl_find_backend(const char *name)
-{
-    if (name == NULL || strcmp(name, "auto") == 0)
-        return -1;
-    for (int n = 0; n < MP_ARRAY_SIZE(backends); n++) {
-        if (strcmp(backends[n]->name, name) == 0)
-            return n;
-    }
-    return -2;
-}
-
-int mpgl_validate_backend_opt(struct mp_log *log, const struct m_option *opt,
-                              struct bstr name, struct bstr param)
-{
-    if (bstr_equals0(param, "help")) {
-        mp_info(log, "OpenGL windowing backends:\n");
-        mp_info(log, "    auto (autodetect)\n");
-        for (int n = 0; n < MP_ARRAY_SIZE(backends); n++)
-            mp_info(log, "    %s\n", backends[n]->name);
-        return M_OPT_EXIT - 1;
-    }
-    char s[20];
-    snprintf(s, sizeof(s), "%.*s", BSTR_P(param));
-    return mpgl_find_backend(s) >= -1 ? 1 : M_OPT_INVALID;
-}
-
-#if HAVE_C11_TLS
-static _Thread_local MPGLContext *current_context;
-
-static void * GLAPIENTRY get_native_display(const char *name)
-{
-    if (current_context && current_context->native_display_type &&
-        name && strcmp(current_context->native_display_type, name) == 0)
-        return current_context->native_display;
-    return NULL;
-}
-
-static void set_current_context(MPGLContext *context)
-{
-    current_context = context;
-    if (context && !context->gl->MPGetNativeDisplay)
-        context->gl->MPGetNativeDisplay = get_native_display;
-}
-#else
-static void set_current_context(MPGLContext *context)
-{
-}
-#endif
-
-static MPGLContext *init_backend(struct vo *vo, const struct mpgl_driver *driver,
-                                 bool probing, int vo_flags)
-{
-    MPGLContext *ctx = talloc_ptrtype(NULL, ctx);
-    *ctx = (MPGLContext) {
-        .gl = talloc_zero(ctx, GL),
-        .vo = vo,
-        .driver = driver,
-    };
-    bool old_probing = vo->probing;
-    vo->probing = probing; // hack; kill it once backends are separate
-    MP_VERBOSE(vo, "Initializing OpenGL backend '%s'\n", ctx->driver->name);
-    ctx->priv = talloc_zero_size(ctx, ctx->driver->priv_size);
-    if (ctx->driver->init(ctx, vo_flags) < 0) {
-        talloc_free(ctx);
-        return NULL;
-    }
-    vo->probing = old_probing;
-
-    if (!ctx->gl->version && !ctx->gl->es)
-        goto cleanup;
-
-    if (ctx->gl->es && vo->probing) {
-        MP_INFO(ctx->vo, "Skipping experimental GLES support (use --vo=opengl).\n");
-        goto cleanup;
-    }
-
-    if (ctx->gl->mpgl_caps & MPGL_CAP_SW) {
-        MP_WARN(ctx->vo, "Suspected software renderer or indirect context.\n");
-        if (vo->probing && !(vo_flags & VOFLAG_SW))
-            goto cleanup;
-    }
-
-    ctx->gl->debug_context = !!(vo_flags & VOFLAG_GL_DEBUG);
-
-    set_current_context(ctx);
-
-    return ctx;
-
-cleanup:
-    mpgl_uninit(ctx);
-    return NULL;
-}
-
-// Create a VO window and create a GL context on it.
-//  vo_flags: passed to the backend's create window function
-MPGLContext *mpgl_init(struct vo *vo, const char *backend_name, int vo_flags)
-{
-    MPGLContext *ctx = NULL;
-    int index = mpgl_find_backend(backend_name);
-    if (index == -1) {
-        for (int n = 0; n < MP_ARRAY_SIZE(backends); n++) {
-            ctx = init_backend(vo, backends[n], true, vo_flags);
-            if (ctx)
-                break;
-        }
-    } else if (index >= 0) {
-        ctx = init_backend(vo, backends[index], false, vo_flags);
-    }
-    return ctx;
-}
-
-int mpgl_reconfig_window(struct MPGLContext *ctx)
-{
-    return ctx->driver->reconfig(ctx);
-}
-
-int mpgl_control(struct MPGLContext *ctx, int *events, int request, void *arg)
-{
-    return ctx->driver->control(ctx, events, request, arg);
-}
-
-void mpgl_swap_buffers(struct MPGLContext *ctx)
-{
-    ctx->driver->swap_buffers(ctx);
-}
-
-void mpgl_uninit(MPGLContext *ctx)
-{
-    set_current_context(NULL);
-    if (ctx)
-        ctx->driver->uninit(ctx);
-    talloc_free(ctx);
 }

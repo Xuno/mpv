@@ -10,6 +10,11 @@ from waftools.checks.custom import *
 
 build_options = [
     {
+        'name': '--gpl3',
+        'desc': 'GPL3 license',
+        'default': 'disable',
+        'func': check_true
+    }, {
         'name': '--cplayer',
         'desc': 'mpv CLI player',
         'default': 'enable',
@@ -49,6 +54,11 @@ build_options = [
         'name': '--manpage-build',
         'desc': 'manpage generation',
         'func': check_ctx_vars('RST2MAN')
+    }, {
+        'name': '--html-build',
+        'desc': 'html manual generation',
+        'func': check_ctx_vars('RST2HTML'),
+        'default': 'disable',
     }, {
         'name': '--pdf-build',
         'desc': 'pdf manual generation',
@@ -130,14 +140,13 @@ main_dependencies = [
         'name': 'win32',
         'desc': 'win32',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
-        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid', 'avrt']),
+        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'avrt', 'dwmapi']),
     }, {
         'name': '--win32-internal-pthreads',
         'desc': 'internal pthread wrapper for win32 (Vista+)',
         'deps_neg': [ 'posix' ],
         'deps': [ 'win32' ],
         'func': check_true,
-        'default': 'disable',
     }, {
         'name': 'pthreads',
         'desc': 'POSIX threads',
@@ -194,12 +203,6 @@ iconv support use --disable-iconv.",
         'desc': 'w32/dos paths',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
         'func': check_true
-    }, {
-        'name': '--waio',
-        'desc': 'libwaio for win32',
-        'deps': [ 'os-win32', 'mingw' ],
-        'func': check_libs(['waio'],
-                    check_statement('waio/waio.h', 'waio_alloc(0, 0, 0, 0)')),
     }, {
         'name': '--termios',
         'desc': 'termios',
@@ -419,9 +422,10 @@ FFmpeg/Libav libraries. You need at least {0}. Aborting.".format(libav_versions_
         'req':  True,
         'fmsg': 'No resampler found. Install libavresample or libswresample (FFmpeg).'
     }, {
-        'name': '--libavfilter',
+        'name': 'libavfilter',
         'desc': 'libavfilter',
         'func': check_pkg_config('libavfilter', '>= 5.0.0'),
+        'req':  True,
     }, {
         'name': '--libavdevice',
         'desc': 'libavdevice',
@@ -474,7 +478,37 @@ FFmpeg/Libav libraries. You need at least {0}. Aborting.".format(libav_versions_
         'func': check_statement('libavcodec/avcodec.h',
                                 'AVSubtitleRect r = {.linesize={0}}',
                                 use='libav'),
-    },
+    }, {
+        'name': 'avcodec-profile-name',
+        'desc': 'libavcodec avcodec_profile_name()',
+        'func': check_statement('libavcodec/avcodec.h',
+                                'avcodec_profile_name(0,0)',
+                                use='libav'),
+    }, {
+        'name': 'avcodec-new-codec-api',
+        'desc': 'libavcodec decode/encode API',
+        'func': check_statement('libavcodec/avcodec.h',
+                                'avcodec_send_packet(0,0)',
+                                use='libav'),
+    }, {
+        'name': 'avcodec-has-codecpar',
+        'desc': 'libavcodec AVCodecParameters API',
+        'func': check_statement('libavformat/avformat.h',
+                                '(void)offsetof(AVStream, codecpar)',
+                                use='libav'),
+    }, {
+        'name': 'avutil-has-hwcontext',
+        'desc': 'libavutil AVHWFramesContext API',
+        'func': check_statement('libavutil/frame.h',
+                                '(void)offsetof(AVFrame, hw_frames_ctx)',
+                                use='libav'),
+    }, {
+        'name': 'avutil-st2084',
+        'desc': 'libavutil AVCOL_TRC_SMPTEST2084',
+        'func': check_statement('libavutil/pixfmt.h',
+                                'AVCOL_TRC_SMPTEST2084',
+                                use='libav'),
+    }
 ]
 
 audio_output_features = [
@@ -546,6 +580,10 @@ audio_output_features = [
         'func': check_pkg_config('openal', '>= 1.13'),
         'default': 'disable'
     }, {
+        'name': '--opensles',
+        'desc': 'OpenSL ES audio output',
+        'func': check_statement('SLES/OpenSLES.h', 'slCreateEngine', lib="OpenSLES"),
+    }, {
         'name': '--alsa',
         'desc': 'ALSA audio output',
         'func': check_pkg_config('alsa', '>= 1.0.18'),
@@ -556,10 +594,6 @@ audio_output_features = [
         'func': check_cc(
             fragment=load_fragment('coreaudio.c'),
             framework_name=['CoreFoundation', 'CoreAudio', 'AudioUnit', 'AudioToolbox'])
-    }, {
-        'name': '--dsound',
-        'desc': 'DirectSound audio output',
-        'func': check_cc(header_name='dsound.h'),
     }, {
         'name': '--wasapi',
         'desc': 'WASAPI audio output',
@@ -643,7 +677,10 @@ video_output_features = [
         'desc': 'OpenGL DRM EGL Backend',
         'deps': [ 'drm', 'gbm' ],
         'groups': [ 'gl' ],
-        'func': check_pkg_config('egl', 'gl'),
+        'func': compose_checks(
+            check_pkg_config('egl'),
+            check_pkg_config_cflags('gl')
+        )
     } , {
         'name': '--gl-wayland',
         'desc': 'OpenGL Wayland Backend',
@@ -659,6 +696,21 @@ video_output_features = [
         'func': check_statement('windows.h', 'wglCreateContext(0)',
                                 lib='opengl32')
     } , {
+        'name': '--gl-dxinterop',
+        'desc': 'OpenGL/DirectX Interop Backend',
+        'deps': [ 'gl-win32' ],
+        'groups': [ 'gl' ],
+        'func': compose_checks(
+            check_statement(['GL/gl.h', 'GL/wglext.h'], 'int i = WGL_ACCESS_WRITE_DISCARD_NV'),
+            check_statement('d3d9.h', 'IDirect3D9Ex *d'))
+    } , {
+        'name': '--egl-angle',
+        'desc': 'OpenGL Win32 ANGLE Backend',
+        'deps_any': [ 'os-win32', 'os-cygwin' ],
+        'groups': [ 'gl' ],
+        'func': check_statement(['EGL/egl.h', 'EGL/eglext.h'],
+                                'int x = EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE')
+    } , {
         'name': '--vdpau',
         'desc': 'VDPAU acceleration',
         'deps': [ 'x11' ],
@@ -672,7 +724,7 @@ video_output_features = [
         'name': '--vaapi',
         'desc': 'VAAPI acceleration',
         'deps': [ 'libdl' ],
-        'deps_any': [ 'x11', 'wayland' ],
+        'deps_any': [ 'x11', 'wayland', 'egl-drm' ],
         'func': check_pkg_config('libva', '>= 0.36.0'),
     }, {
         'name': '--vaapi-x11',
@@ -684,7 +736,11 @@ video_output_features = [
         'desc': 'VAAPI (Wayland support)',
         'deps': [ 'vaapi', 'gl-wayland' ],
         'func': check_pkg_config('libva-wayland', '>= 0.36.0'),
-
+    }, {
+        'name': '--vaapi-drm',
+        'desc': 'VAAPI (DRM/EGL support)',
+        'deps': [ 'vaapi', 'egl-drm' ],
+        'func': check_pkg_config('libva-drm', '>= 0.36.0'),
     }, {
         'name': '--vaapi-glx',
         'desc': 'VAAPI GLX',
@@ -698,7 +754,6 @@ video_output_features = [
     }, {
         'name': 'vaapi-egl',
         'desc': 'VAAPI EGL',
-        'deps': [ 'c11-tls' ], # indirectly
         'deps_any': [ 'vaapi-x-egl', 'vaapi-wayland' ],
         'func': check_true,
     }, {
@@ -715,6 +770,10 @@ video_output_features = [
         'desc': 'Direct3D support',
         'deps': [ 'win32' ],
         'func': check_cc(header_name='d3d9.h'),
+    }, {
+        'name': '--android',
+        'desc': 'Android support',
+        'func': check_statement('android/api-level.h', '(void)__ANDROID__'),  # arbitrary android-specific header
     }, {
         # We need MMAL/bcm_host/dispmanx APIs. Also, most RPI distros require
         # every project to hardcode the paths to the include directories. Also,
@@ -737,10 +796,43 @@ video_output_features = [
             check_statement('GL/gl.h', '(void)GL_RGB32F'),     # arbitrary OpenGL 3.0 symbol
             check_statement('GL/gl.h', '(void)GL_LUMINANCE16') # arbitrary OpenGL legacy-only symbol
         ),
+    }, {
+        'name': '--standard-gl',
+        'desc': 'Desktop standard OpengGL support',
+        'func': compose_checks(
+            check_statement('GL/gl.h', '(void)GL_RGB32F'),     # arbitrary OpenGL 3.0 symbol
+            check_statement('GL/gl.h', '(void)GL_LUMINANCE16') # arbitrary OpenGL legacy-only symbol
+        ),
+    } , {
+        'name': '--android-gl',
+        'desc': 'Android OpenGL ES support',
+        'deps': ['android'],
+        'func': check_statement('GLES3/gl3.h', '(void)GL_RGB32F'),  # arbitrary OpenGL ES 3.0 symbol
+    } , {
+        'name': '--any-gl',
+        'desc': 'Any OpenGL (ES) support',
+        'deps_any': ['standard-gl', 'android-gl', 'cocoa'],
+        'func': check_true
+    } , {
+        'name': '--plain-gl',
+        'desc': 'OpenGL without platform-specific code (e.g. for libmpv)',
+        'deps': ['any-gl'],
+        'deps_any': [ 'libmpv-shared', 'libmpv-static' ],
+        'func': check_true,
     } , {
         'name': '--gl',
         'desc': 'OpenGL video outputs',
-        'deps_any': [ 'gl-cocoa', 'gl-x11', 'egl-drm', 'gl-win32', 'gl-wayland', 'rpi' ],
+        'deps_any': [ 'gl-cocoa', 'gl-x11', 'egl-x11', 'egl-drm',
+                      'gl-win32', 'gl-wayland', 'rpi', 'plain-gl' ],
+        'func': check_true,
+        'req': True,
+        'fmsg': "Unable to find OpenGL header files for video output. " +
+                "Aborting. If you really mean to compile without OpenGL " +
+                "video outputs use --disable-gl."
+    }, {
+        'name': 'egl-helpers',
+        'desc': 'EGL helper functions',
+        'deps_any': [ 'egl-x11' ],
         'func': check_true
     }
 ]
@@ -773,14 +865,16 @@ hwaccel_features = [
                                 'av_vdpau_bind_context(0,0,0,AV_HWACCEL_FLAG_ALLOW_HIGH_DEPTH)',
                                 use='libav'),
     }, {
-        'name': '--dxva2-hwaccel',
-        'desc': 'libavcodec DXVA2 hwaccel',
+        'name': '--d3d-hwaccel',
+        'desc': 'libavcodec DXVA2 and D3D11VA hwaccel',
         'deps': [ 'win32' ],
-        'func': check_headers('libavcodec/dxva2.h', use='libav'),
+        'func': compose_checks(
+                    check_headers('libavcodec/dxva2.h',  use='libav'),
+                    check_headers('libavcodec/d3d11va.h',  use='libav')),
     }, {
         'name': 'sse4-intrinsics',
         'desc': 'GCC SSE4 intrinsics for GPU memcpy',
-        'deps_any': [ 'dxva2-hwaccel', 'vaapi-hwaccel' ],
+        'deps_any': [ 'd3d-hwaccel', 'vaapi-hwaccel' ],
         'func': check_cc(fragment=load_fragment('sse.c')),
     }
 ]
@@ -810,11 +904,6 @@ radio_and_tv_features = [
         'desc': 'libv4l2 support',
         'func': check_pkg_config('libv4l2'),
         'deps': [ 'tv-v4l2' ],
-    }, {
-        'name': '--pvr',
-        'desc': 'Video4Linux2 MPEG PVR interface',
-        'deps': [ 'tv' ],
-        'func': check_cc(fragment=load_fragment('pvr.c')),
     }, {
         'name': '--audio-input',
         'desc': 'audio input support',
@@ -852,6 +941,8 @@ _INSTALL_DIRS_LIST = [
     ('mandir',  '${DATADIR}/man',     'man pages '),
     ('docdir',  '${DATADIR}/doc/mpv', 'documentation files'),
     ('zshdir',  '${DATADIR}/zsh/site-functions', 'zsh completion functions'),
+
+    ('confloaddir', '${CONFDIR}', 'configuration files load directory'),
 ]
 
 def options(opt):
@@ -885,7 +976,7 @@ def options(opt):
     group.add_option('--lua',
         type    = 'string',
         dest    = 'LUA_VER',
-        help    = "select Lua package which should be autodetected. Choices: 51 51deb 51fbsd 52 52deb 52arch 52fbsd luajit")
+        help    = "select Lua package which should be autodetected. Choices: 51 51deb 51obsd 51fbsd 52 52deb 52arch 52fbsd luajit")
 
 @conf
 def is_optimization(ctx):
@@ -911,6 +1002,7 @@ def configure(ctx):
     ctx.find_program(pkg_config,  var='PKG_CONFIG')
     ctx.find_program(ar,          var='AR')
     ctx.find_program('perl',      var='BIN_PERL')
+    ctx.find_program('rst2html',  var='RST2HTML',  mandatory=False)
     ctx.find_program('rst2man',   var='RST2MAN',   mandatory=False)
     ctx.find_program('rst2pdf',   var='RST2PDF',   mandatory=False)
     ctx.find_program(windres,     var='WINDRES',   mandatory=False)

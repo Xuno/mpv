@@ -29,7 +29,7 @@
 #include "osdep/atomics.h"
 #include "osdep/io.h"
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 
 #include "config.h"
 
@@ -57,7 +57,6 @@
 extern const stream_info_t stream_info_cdda;
 extern const stream_info_t stream_info_dvb;
 extern const stream_info_t stream_info_tv;
-extern const stream_info_t stream_info_pvr;
 extern const stream_info_t stream_info_smb;
 extern const stream_info_t stream_info_null;
 extern const stream_info_t stream_info_memory;
@@ -89,9 +88,6 @@ static const stream_info_t *const stream_list[] = {
 #endif
 #if HAVE_TV
     &stream_info_tv,
-#endif
-#if HAVE_PVR
-    &stream_info_pvr,
 #endif
 #if HAVE_LIBSMBCLIENT
     &stream_info_smb,
@@ -504,7 +500,7 @@ int stream_fill_buffer(stream_t *s)
 }
 
 // Read between 1..buf_size bytes of data, return how much data has been read.
-// Return 0 on EOF, error, of if buf_size was 0.
+// Return 0 on EOF, error, or if buf_size was 0.
 int stream_read_partial(stream_t *s, char *buf, int buf_size)
 {
     assert(s->buf_pos <= s->buf_len);
@@ -918,7 +914,7 @@ struct bstr stream_read_complete(struct stream *s, void *talloc_ctx,
     int total_read = 0;
     int padding = 1;
     char *buf = NULL;
-    int64_t size = stream_get_size(s);
+    int64_t size = stream_get_size(s) - stream_tell(s);
     if (size > max_size)
         return (struct bstr){NULL, 0};
     if (size > 0)
@@ -956,20 +952,15 @@ struct bstr stream_read_file(const char *filename, void *talloc_ctx,
     return res;
 }
 
+#ifndef __MINGW32__
 struct mp_cancel {
     atomic_bool triggered;
-#ifdef __MINGW32__
-    HANDLE event;
-#endif
     int wakeup_pipe[2];
 };
 
 static void cancel_destroy(void *p)
 {
     struct mp_cancel *c = p;
-#ifdef __MINGW32__
-    CloseHandle(c->event);
-#endif
     close(c->wakeup_pipe[0]);
     close(c->wakeup_pipe[1]);
 }
@@ -979,9 +970,6 @@ struct mp_cancel *mp_cancel_new(void *talloc_ctx)
     struct mp_cancel *c = talloc_ptrtype(talloc_ctx, c);
     talloc_set_destructor(c, cancel_destroy);
     *c = (struct mp_cancel){.triggered = ATOMIC_VAR_INIT(false)};
-#ifdef __MINGW32__
-    c->event = CreateEventW(NULL, TRUE, FALSE, NULL);
-#endif
     mp_make_wakeup_pipe(c->wakeup_pipe);
     return c;
 }
@@ -990,9 +978,6 @@ struct mp_cancel *mp_cancel_new(void *talloc_ctx)
 void mp_cancel_trigger(struct mp_cancel *c)
 {
     atomic_store(&c->triggered, true);
-#ifdef __MINGW32__
-    SetEvent(c->event);
-#endif
     write(c->wakeup_pipe[1], &(char){0}, 1);
 }
 
@@ -1000,9 +985,6 @@ void mp_cancel_trigger(struct mp_cancel *c)
 void mp_cancel_reset(struct mp_cancel *c)
 {
     atomic_store(&c->triggered, false);
-#ifdef __MINGW32__
-    ResetEvent(c->event);
-#endif
     // Flush it fully.
     while (1) {
         int r = read(c->wakeup_pipe[0], &(char[256]){0}, 256);
@@ -1022,27 +1004,12 @@ bool mp_cancel_test(struct mp_cancel *c)
 
 // Wait until the even is signaled. If the timeout (in seconds) expires, return
 // false. timeout==0 polls, timeout<0 waits forever.
-#ifdef __MINGW32__
-bool mp_cancel_wait(struct mp_cancel *c, double timeout)
-{
-    return WaitForSingleObject(c->event, timeout < 0 ? INFINITE : timeout * 1000)
-            == WAIT_OBJECT_0;
-}
-#else
 bool mp_cancel_wait(struct mp_cancel *c, double timeout)
 {
     struct pollfd fd = { .fd = c->wakeup_pipe[0], .events = POLLIN };
     poll(&fd, 1, timeout * 1000);
     return fd.revents & POLLIN;
 }
-#endif
-
-#ifdef __MINGW32__
-void *mp_cancel_get_event(struct mp_cancel *c)
-{
-    return c->event;
-}
-#endif
 
 // The FD becomes readable if mp_cancel_test() would return true.
 // Don't actually read from it, just use it for poll().
@@ -1050,6 +1017,63 @@ int mp_cancel_get_fd(struct mp_cancel *c)
 {
     return c->wakeup_pipe[0];
 }
+
+#else
+
+struct mp_cancel {
+    atomic_bool triggered;
+    HANDLE event;
+};
+
+static void cancel_destroy(void *p)
+{
+    struct mp_cancel *c = p;
+    CloseHandle(c->event);
+}
+
+struct mp_cancel *mp_cancel_new(void *talloc_ctx)
+{
+    struct mp_cancel *c = talloc_ptrtype(talloc_ctx, c);
+    talloc_set_destructor(c, cancel_destroy);
+    *c = (struct mp_cancel){.triggered = ATOMIC_VAR_INIT(false)};
+    c->event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    return c;
+}
+
+void mp_cancel_trigger(struct mp_cancel *c)
+{
+    atomic_store(&c->triggered, true);
+    SetEvent(c->event);
+}
+
+void mp_cancel_reset(struct mp_cancel *c)
+{
+    atomic_store(&c->triggered, false);
+    ResetEvent(c->event);
+}
+
+bool mp_cancel_test(struct mp_cancel *c)
+{
+    return c ? atomic_load_explicit(&c->triggered, memory_order_relaxed) : false;
+}
+
+bool mp_cancel_wait(struct mp_cancel *c, double timeout)
+{
+    return WaitForSingleObject(c->event, timeout < 0 ? INFINITE : timeout * 1000)
+            == WAIT_OBJECT_0;
+}
+
+void *mp_cancel_get_event(struct mp_cancel *c)
+{
+    return c->event;
+}
+
+int mp_cancel_get_fd(struct mp_cancel *c)
+{
+    return -1;
+}
+
+#endif
 
 char **stream_get_proto_list(void)
 {

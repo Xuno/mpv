@@ -9,7 +9,7 @@
 
 #include "config.h"
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/common.h"
 #include "misc/bstr.h"
 #include "common/msg.h"
@@ -58,6 +58,7 @@ struct vo_priv {
 
 struct mpv_opengl_cb_context {
     struct mp_log *log;
+    struct mpv_global *global;
     struct mp_client_api *client_api;
 
     pthread_mutex_t lock;
@@ -88,13 +89,16 @@ struct mpv_opengl_cb_context {
     struct vo *active;
     int hwdec_api;
 
+    // --- This is only mutable while initialized=false, during which nothing
+    //     except the OpenGL context manager is allowed to access it.
+    struct mp_hwdec_devices *hwdec_devs;
+
     // --- All of these can only be accessed from the thread where the host
     //     application's OpenGL context is current - i.e. only while the
     //     host application is calling certain mpv_opengl_cb_* APIs.
     GL *gl;
     struct gl_video *renderer;
     struct gl_hwdec *hwdec;
-    struct mp_hwdec_info hwdec_info; // it's also semi-immutable after init
 };
 
 static void update(struct vo_priv *p);
@@ -128,8 +132,7 @@ struct mpv_opengl_cb_context *mp_opengl_create(struct mpv_global *g,
     pthread_mutex_init(&ctx->lock, NULL);
     pthread_cond_init(&ctx->wakeup, NULL);
 
-    ctx->gl = talloc_zero(ctx, GL);
-
+    ctx->global = g;
     ctx->log = mp_log_new(ctx, g->log, "opengl-cb");
     ctx->client_api = client_api;
 
@@ -172,16 +175,18 @@ int mpv_opengl_cb_init_gl(struct mpv_opengl_cb_context *ctx, const char *exts,
     if (ctx->renderer)
         return MPV_ERROR_INVALID_PARAMETER;
 
+    ctx->gl = talloc_zero(ctx, GL);
+
     mpgl_load_functions2(ctx->gl, get_proc_address, get_proc_address_ctx,
                          exts, ctx->log);
-    ctx->renderer = gl_video_init(ctx->gl, ctx->log, NULL);
+    ctx->renderer = gl_video_init(ctx->gl, ctx->log, ctx->global);
     if (!ctx->renderer)
         return MPV_ERROR_UNSUPPORTED;
 
-    ctx->hwdec = gl_hwdec_load_api_id(ctx->log, ctx->gl, ctx->hwdec_api);
+    ctx->hwdec_devs = hwdec_devices_create();
+    ctx->hwdec = gl_hwdec_load_api(ctx->log, ctx->gl, ctx->global,
+                                   ctx->hwdec_devs, ctx->hwdec_api);
     gl_video_set_hwdec(ctx->renderer, ctx->hwdec);
-    if (ctx->hwdec)
-        ctx->hwdec_info.hwctx = ctx->hwdec->hwctx;
 
     pthread_mutex_lock(&ctx->lock);
     // We don't know the exact caps yet - use a known superset
@@ -219,6 +224,8 @@ int mpv_opengl_cb_uninit_gl(struct mpv_opengl_cb_context *ctx)
     ctx->renderer = NULL;
     gl_hwdec_uninit(ctx->hwdec);
     ctx->hwdec = NULL;
+    hwdec_devices_destroy(ctx->hwdec_devs);
+    ctx->hwdec_devs = NULL;
     talloc_free(ctx->gl);
     ctx->gl = NULL;
     talloc_free(ctx->new_opts_cfg);
@@ -266,7 +273,8 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
         struct vo_priv *opts = ctx->new_opts ? ctx->new_opts : p;
         if (opts) {
             gl_video_set_options(ctx->renderer, opts->renderer_opts);
-            gl_video_configure_queue(ctx->renderer, vo);
+            if (vo)
+                gl_video_configure_queue(ctx->renderer, vo);
             ctx->gl->debug_context = opts->use_gl_debug;
             gl_video_set_debug(ctx->renderer, opts->use_gl_debug);
         }
@@ -351,7 +359,7 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     assert(!p->ctx->next_frame);
     p->ctx->next_frame = vo_frame_ref(frame);
     p->ctx->expected_flip_count = p->ctx->flip_count + 1;
-    p->ctx->redrawing = frame ? frame->redraw : false;
+    p->ctx->redrawing = frame->redraw || !frame->current;
     update(p);
     pthread_mutex_unlock(&p->ctx->lock);
 }
@@ -510,11 +518,6 @@ static int control(struct vo *vo, uint32_t request, void *data)
         char *arg = data;
         return reparse_cmdline(p, arg);
     }
-    case VOCTRL_GET_HWDEC_INFO: {
-        struct mp_hwdec_info **arg = data;
-        *arg = p->ctx ? &p->ctx->hwdec_info : NULL;
-        return true;
-    }
     }
 
     return VO_NOTIMPL;
@@ -556,6 +559,8 @@ static int preinit(struct vo *vo)
     memset(p->ctx->eq.values, 0, sizeof(p->ctx->eq.values));
     p->ctx->eq_changed = true;
     pthread_mutex_unlock(&p->ctx->lock);
+
+    vo->hwdec_devs = p->ctx->hwdec_devs;
 
     return 0;
 }

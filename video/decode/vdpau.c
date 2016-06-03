@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <libavcodec/avcodec.h>
@@ -75,24 +75,19 @@ static int init(struct lavc_ctx *ctx)
     struct priv *p = talloc_ptrtype(NULL, p);
     *p = (struct priv) {
         .log = mp_log_new(p, ctx->log, "vdpau"),
-        .mpvdp = ctx->hwdec_info->hwctx->vdpau_ctx,
+        .mpvdp = hwdec_devices_get(ctx->hwdec_devs, HWDEC_VDPAU)->ctx,
     };
     ctx->hwdec_priv = p;
 
-    if (mp_vdpau_handle_preemption(p->mpvdp, &p->preemption_counter) < 1)
-        return -1;
-
+    mp_vdpau_handle_preemption(p->mpvdp, &p->preemption_counter);
     return 0;
 }
 
-static int probe(struct vd_lavc_hwdec *hwdec, struct mp_hwdec_info *info,
-                 const char *decoder)
+static int probe(struct lavc_ctx *ctx, struct vd_lavc_hwdec *hwdec,
+                 const char *codec)
 {
-    hwdec_request_api(info, "vdpau");
-    if (!info || !info->hwctx || !info->hwctx->vdpau_ctx)
+    if (!hwdec_devices_load(ctx->hwdec_devs, HWDEC_VDPAU))
         return HWDEC_ERR_NO_CTX;
-    if (mp_vdpau_guess_if_emulated(info->hwctx->vdpau_ctx))
-        return HWDEC_ERR_EMULATED;
     return 0;
 }
 

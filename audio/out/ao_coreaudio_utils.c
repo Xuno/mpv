@@ -136,36 +136,11 @@ coreaudio_error:
     return err;
 }
 
-char *fourcc_repr_buf(char *buf, size_t buf_size, uint32_t code)
-{
-    // Extract FourCC letters from the uint32_t and finde out if it's a valid
-    // code that is made of letters.
-    unsigned char fcc[4] = {
-        (code >> 24) & 0xFF,
-        (code >> 16) & 0xFF,
-        (code >> 8)  & 0xFF,
-        code         & 0xFF,
-    };
-
-    bool valid_fourcc = true;
-    for (int i = 0; i < 4; i++) {
-        if (fcc[i] < 32 || fcc[i] >= 128)
-            valid_fourcc = false;
-    }
-
-    if (valid_fourcc)
-        snprintf(buf, buf_size, "'%c%c%c%c'", fcc[0], fcc[1], fcc[2], fcc[3]);
-    else
-        snprintf(buf, buf_size, "%u", (unsigned int)code);
-
-    return buf;
-}
-
 bool check_ca_st(struct ao *ao, int level, OSStatus code, const char *message)
 {
     if (code == noErr) return true;
 
-    mp_msg(ao->log, level, "%s (%s)\n", message, fourcc_repr(code));
+    mp_msg(ao->log, level, "%s (%s)\n", message, mp_tag_str(code));
 
     return false;
 }
@@ -258,7 +233,7 @@ void ca_print_asbd(struct ao *ao, const char *description,
                    const AudioStreamBasicDescription *asbd)
 {
     uint32_t flags  = asbd->mFormatFlags;
-    char *format    = fourcc_repr(asbd->mFormatID);
+    char *format    = mp_tag_str(asbd->mFormatID);
     int mpfmt       = ca_asbd_to_mp_format(asbd);
 
     MP_VERBOSE(ao,
@@ -348,6 +323,9 @@ bool ca_stream_supports_compressed(struct ao *ao, AudioStreamID stream)
 
     for (int i = 0; i < n_formats; i++) {
         AudioStreamBasicDescription asbd = formats[i].mFormat;
+
+        ca_print_asbd(ao, "- ", &asbd);
+
         if (ca_formatid_is_compressed(asbd.mFormatID)) {
             talloc_free(formats);
             return true;
@@ -355,30 +333,6 @@ bool ca_stream_supports_compressed(struct ao *ao, AudioStreamID stream)
     }
 
     talloc_free(formats);
-coreaudio_error:
-    return false;
-}
-
-bool ca_device_supports_compressed(struct ao *ao, AudioDeviceID device)
-{
-    AudioStreamID *streams = NULL;
-    size_t n_streams;
-
-    /* Retrieve all the output streams. */
-    OSStatus err =
-        CA_GET_ARY_O(device, kAudioDevicePropertyStreams, &streams, &n_streams);
-
-    CHECK_CA_ERROR("could not get number of streams.");
-
-    for (int i = 0; i < n_streams; i++) {
-        if (ca_stream_supports_compressed(ao, streams[i])) {
-            talloc_free(streams);
-            return true;
-        }
-    }
-
-    talloc_free(streams);
-
 coreaudio_error:
     return false;
 }
@@ -470,7 +424,7 @@ int64_t ca_get_device_latency_us(struct ao *ao, AudioDeviceID device)
         if (err == noErr) {
             latency_frames += temp;
             MP_VERBOSE(ao, "Latency property %s: %d frames\n",
-                       fourcc_repr(latency_properties[n]), (int)temp);
+                       mp_tag_str(latency_properties[n]), (int)temp);
         }
     }
 

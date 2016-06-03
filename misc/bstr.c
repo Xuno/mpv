@@ -24,7 +24,7 @@
 
 #include <libavutil/common.h>
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 
 #include "common/common.h"
 #include "misc/ctype.h"
@@ -215,9 +215,9 @@ struct bstr *bstr_splitlines(void *talloc_ctx, struct bstr str)
     return r;
 }
 
-struct bstr bstr_getline(struct bstr str, struct bstr *rest)
+struct bstr bstr_splitchar(struct bstr str, struct bstr *rest, const char c)
 {
-    int pos = bstrchr(str, '\n');
+    int pos = bstrchr(str, c);
     if (pos < 0)
         pos = str.len;
     if (rest)
@@ -240,6 +240,14 @@ bool bstr_eatstart(struct bstr *s, struct bstr prefix)
     if (!bstr_startswith(*s, prefix))
         return false;
     *s = bstr_cut(*s, prefix.len);
+    return true;
+}
+
+bool bstr_eatend(struct bstr *s, struct bstr prefix)
+{
+    if (!bstr_endswith(*s, prefix))
+        return false;
+    s->len -= prefix.len;
     return true;
 }
 
@@ -401,15 +409,21 @@ void bstr_xappend_vasprintf(void *talloc_ctx, bstr *s, const char *fmt,
     int size;
     va_list copy;
     va_copy(copy, ap);
+    size_t avail = talloc_get_size(s->start) - s->len;
+    char *dest = s->start ? s->start + s->len : NULL;
     char c;
-    size = vsnprintf(&c, 1, fmt, copy);
+    if (avail < 1)
+        dest = &c;
+    size = vsnprintf(dest, MPMAX(avail, 1), fmt, copy);
     va_end(copy);
 
     if (size < 0)
         abort();
 
-    resize_append(talloc_ctx, s, size + 1);
-    vsnprintf(s->start + s->len, size + 1, fmt, ap);
+    if (avail < 1 || size + 1 > avail) {
+        resize_append(talloc_ctx, s, size + 1);
+        vsnprintf(s->start + s->len, size + 1, fmt, ap);
+    }
     s->len += size;
 }
 

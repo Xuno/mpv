@@ -86,6 +86,7 @@ typedef struct mp_cmd {
     double scale;               // for scaling numeric arguments
     const struct mp_cmd_def *def;
     char *sender; // name of the client API user which sent this
+    char *key_name; // string representation of the key binding
 } mp_cmd_t;
 
 struct mp_input_src {
@@ -131,6 +132,9 @@ void mp_input_src_feed_cmd_text(struct mp_input_src *src, char *buf, size_t len)
 // with modifiers applied. MP_INPUT_RELEASE_ALL is also a valid value.
 void mp_input_put_key(struct input_ctx *ictx, int code);
 
+// Like mp_input_put_key(), but ignore mouse disable option for mouse buttons.
+void mp_input_put_key_artificial(struct input_ctx *ictx, int code);
+
 // Like mp_input_put_key(), but process all UTF-8 characters in the given
 // string as key events.
 void mp_input_put_key_utf8(struct input_ctx *ictx, int mods, struct bstr t);
@@ -141,6 +145,9 @@ void mp_input_put_axis(struct input_ctx *ictx, int direction, double value);
 
 // Update mouse position (in window coordinates).
 void mp_input_set_mouse_pos(struct input_ctx *ictx, int x, int y);
+
+// Like mp_input_set_mouse_pos(), but ignore mouse disable option.
+void mp_input_set_mouse_pos_artificial(struct input_ctx *ictx, int x, int y);
 
 void mp_input_get_mouse_pos(struct input_ctx *ictx, int *x, int *y);
 
@@ -249,5 +256,14 @@ struct mp_client_api;
 struct mp_ipc_ctx *mp_init_ipc(struct mp_client_api *client_api,
                                struct mpv_global *global);
 void mp_uninit_ipc(struct mp_ipc_ctx *ctx);
+
+// Serialize the given mpv_event structure to JSON. Returns an allocated string.
+struct mpv_event;
+char *mp_json_encode_event(struct mpv_event *event);
+
+// Given the raw IPC input buffer "buf", remove the first newline-separated
+// command, execute it and return the result (if any) as an allocated string.
+struct mpv_handle;
+char *mp_ipc_consume_next_command(struct mpv_handle *client, void *ctx, bstr *buf);
 
 #endif /* MPLAYER_INPUT_H */

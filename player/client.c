@@ -21,6 +21,7 @@
 #include <assert.h>
 
 #include "common/common.h"
+#include "common/global.h"
 #include "common/msg.h"
 #include "common/msg_control.h"
 #include "input/input.h"
@@ -137,6 +138,7 @@ void mp_clients_init(struct MPContext *mpctx)
     *mpctx->clients = (struct mp_client_api) {
         .mpctx = mpctx,
     };
+    mpctx->global->client_api = mpctx->clients;
     pthread_mutex_init(&mpctx->clients->lock, NULL);
 }
 
@@ -262,6 +264,11 @@ struct mp_log *mp_client_get_log(struct mpv_handle *ctx)
 struct MPContext *mp_client_get_core(struct mpv_handle *ctx)
 {
     return ctx->mpctx;
+}
+
+struct MPContext *mp_client_api_get_core(struct mp_client_api *api)
+{
+    return api->mpctx;
 }
 
 static void wakeup_client(struct mpv_handle *ctx)
@@ -451,7 +458,7 @@ void mpv_terminate_destroy(mpv_handle *ctx)
 static bool check_locale(void)
 {
     char *name = setlocale(LC_NUMERIC, NULL);
-    return strcmp(name, "C") == 0;
+    return !name || strcmp(name, "C") == 0;
 }
 
 mpv_handle *mpv_create(void)
@@ -711,6 +718,8 @@ int mpv_request_event(mpv_handle *ctx, mpv_event_id event, int enable)
 {
     if (!mpv_event_name(event) || enable < 0 || enable > 1)
         return MPV_ERROR_INVALID_PARAMETER;
+    if (event == MPV_EVENT_SHUTDOWN && !enable)
+        return MPV_ERROR_INVALID_PARAMETER;
     assert(event < (int)INTERNAL_EVENT_BASE); // excluded above; they have no name
     pthread_mutex_lock(&ctx->lock);
     uint64_t bit = 1ULL << event;
@@ -824,8 +833,10 @@ static bool conv_node_to_format(void *dst, mpv_format dst_fmt, mpv_node *src)
         return true;
     }
     if (dst_fmt == MPV_FORMAT_INT64 && src->format == MPV_FORMAT_DOUBLE) {
-        if (src->u.double_ >= INT64_MIN && src->u.double_ <= INT64_MAX)
+        if (src->u.double_ >= INT64_MIN && src->u.double_ <= INT64_MAX) {
             *(int64_t *)dst = src->u.double_;
+            return true;
+        }
     }
     return false;
 }
@@ -1060,41 +1071,17 @@ static void setproperty_fn(void *arg)
     struct setproperty_request *req = arg;
     const struct m_option *type = get_mp_type(req->format);
 
-    int err;
-    switch (req->format) {
-    case MPV_FORMAT_STRING: {
-        // Go through explicit string conversion. M_PROPERTY_SET_NODE doesn't
-        // do this, because it tries to be somewhat type-strict. But the client
-        // needs a way to set everything by string.
-        char *s = *(char **)req->data;
-        MP_VERBOSE(req->mpctx, "Set property string: %s='%s'\n", req->name, s);
-        err = mp_property_do(req->name, M_PROPERTY_SET_STRING, s, req->mpctx);
-        break;
+    struct mpv_node *node;
+    struct mpv_node tmp;
+    if (req->format == MPV_FORMAT_NODE) {
+        node = req->data;
+    } else {
+        tmp.format = req->format;
+        memcpy(&tmp.u, req->data, type->type->size);
+        node = &tmp;
     }
-    case MPV_FORMAT_NODE:
-    case MPV_FORMAT_FLAG:
-    case MPV_FORMAT_INT64:
-    case MPV_FORMAT_DOUBLE: {
-        struct mpv_node node;
-        if (req->format == MPV_FORMAT_NODE) {
-            node = *(struct mpv_node *)req->data;
-        } else {
-            // These are basically emulated via mpv_node.
-            node.format = req->format;
-            memcpy(&node.u, req->data, type->type->size);
-        }
-        if (mp_msg_test(req->mpctx->log, MSGL_V)) {
-            struct m_option ot = {.type = &m_option_type_node};
-            char *t = m_option_print(&ot, &node);
-            MP_VERBOSE(req->mpctx, "Set property: %s=%s\n", req->name, t ? t : "?");
-            talloc_free(t);
-        }
-        err = mp_property_do(req->name, M_PROPERTY_SET_NODE, &node, req->mpctx);
-        break;
-    }
-    default:
-        abort();
-    }
+
+    int err = mp_property_do(req->name, M_PROPERTY_SET_NODE, node, req->mpctx);
 
     req->status = translate_property_error(err);
 

@@ -9,9 +9,11 @@
 typedef struct mp_vo_opts {
     struct m_obj_settings *video_driver_list, *vo_defs;
 
+    int taskbar_progress;
     int ontop;
     int fullscreen;
     int border;
+    int fit_border;
     int all_workspaces;
 
     int screen_id;
@@ -19,6 +21,7 @@ typedef struct mp_vo_opts {
     int fs_black_out_screens;
     char *winname;
     int x11_netwm;
+    int x11_bypass_compositor;
     int native_keyrepeat;
 
     float panscan;
@@ -41,6 +44,8 @@ typedef struct mp_vo_opts {
     float force_monitor_aspect;
     float monitor_pixel_aspect;
     int force_window_position;
+
+    char *mmcss_profile;
 
     // vo_wayland, vo_drm
     struct sws_opts *sws_opts;
@@ -173,6 +178,7 @@ typedef struct MPOpts {
     struct m_rel_time play_start;
     struct m_rel_time play_end;
     struct m_rel_time play_length;
+    int rebase_start_time;
     int play_frames;
     double ab_loop[2];
     double step_sec;
@@ -182,6 +188,7 @@ typedef struct MPOpts {
     int ignore_path_in_watch_later_config;
     int pause;
     int keep_open;
+    char *lavfi_complex;
     int stream_id[2][STREAM_TYPE_COUNT];
     int stream_id_ff[STREAM_TYPE_COUNT];
     char **stream_lang[STREAM_TYPE_COUNT];
@@ -221,6 +228,7 @@ typedef struct MPOpts {
 
     struct mp_chmap audio_output_channels;
     int audio_output_format;
+    int audio_normalize;
     int force_srate;
     int dtshd;
     double playback_speed;
@@ -233,6 +241,8 @@ typedef struct MPOpts {
     int field_dominance;
     char **sub_name;
     char **sub_paths;
+    char **audiofile_paths;
+    char **external_files;
     int sub_auto;
     int audiofile_auto;
     int osd_bar_visible;
@@ -267,6 +277,7 @@ typedef struct MPOpts {
 
     int hwdec_api;
     char *hwdec_codecs;
+    int videotoolbox_format;
 
     int w32_priority;
 

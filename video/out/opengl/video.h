@@ -1,19 +1,20 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
+
 #ifndef MP_GL_VIDEO_H
 #define MP_GL_VIDEO_H
 
@@ -23,6 +24,7 @@
 #include "sub/osd.h"
 #include "common.h"
 #include "utils.h"
+#include "lcms.h"
 #include "video/out/filter_kernels.h"
 
 // Texture units 0-5 are used by the video, and for free use by the passes
@@ -30,13 +32,8 @@
 
 // Other texture units are reserved for specific purposes
 #define TEXUNIT_SCALERS  TEXUNIT_VIDEO_NUM
-#define TEXUNIT_3DLUT    (TEXUNIT_SCALERS+4)
+#define TEXUNIT_3DLUT    (TEXUNIT_SCALERS+SCALER_COUNT)
 #define TEXUNIT_DITHER   (TEXUNIT_3DLUT+1)
-
-struct lut3d {
-    uint16_t *data;
-    int size[3];
-};
 
 struct scaler_fun {
     char *name;
@@ -62,18 +59,64 @@ struct scaler {
     GLenum gl_target;
     struct fbotex sep_fbo;
     bool insufficient;
+    int lut_size;
 
     // kernel points here
     struct filter_kernel kernel_storage;
 };
 
+enum scaler_unit {
+    SCALER_SCALE,  // luma/video
+    SCALER_DSCALE, // luma-video downscaling
+    SCALER_CSCALE, // chroma upscaling
+    SCALER_TSCALE, // temporal scaling (interpolation)
+    SCALER_COUNT
+};
+
+enum dither_algo {
+    DITHER_NONE = 0,
+    DITHER_FRUIT,
+    DITHER_ORDERED,
+};
+
+enum alpha_mode {
+    ALPHA_NO = 0,
+    ALPHA_YES,
+    ALPHA_BLEND,
+    ALPHA_BLEND_TILES,
+};
+
+enum blend_subs_mode {
+    BLEND_SUBS_NO = 0,
+    BLEND_SUBS_YES,
+    BLEND_SUBS_VIDEO,
+};
+
+enum prescalers {
+    PRESCALE_NONE = 0,
+    PRESCALE_SUPERXBR,
+    PRESCALE_NNEDI3,
+};
+
+enum tone_mapping {
+    TONE_MAPPING_CLIP,
+    TONE_MAPPING_REINHARD,
+    TONE_MAPPING_HABLE,
+    TONE_MAPPING_GAMMA,
+    TONE_MAPPING_LINEAR,
+};
+
 struct gl_video_opts {
     int dumb_mode;
     struct scaler_config scaler[4];
+    int scaler_lut_size;
     float gamma;
     int gamma_auto;
     int target_prim;
     int target_trc;
+    int target_brightness;
+    int hdr_tone_mapping;
+    float tone_mapping_param;
     int linear_scaling;
     int correct_downscaling;
     int sigmoid_upscaling;
@@ -91,18 +134,21 @@ struct gl_video_opts {
     int use_rectangle;
     struct m_color background;
     int interpolation;
+    float interpolation_threshold;
     int blend_subs;
     char *scale_shader;
     char **pre_shaders;
     char **post_shaders;
+    char **user_shaders;
     int deband;
     struct deband_opts *deband_opts;
     float unsharp;
-    int prescale;
+    int prescale_luma;
     int prescale_passes;
     float prescale_downscaling_threshold;
     struct superxbr_opts *superxbr_opts;
     struct nnedi3_opts *nnedi3_opts;
+    struct mp_icc_opts *icc_opts;
 };
 
 extern const struct m_sub_options gl_video_conf;
@@ -119,7 +165,6 @@ void gl_video_set_options(struct gl_video *p, struct gl_video_opts *opts);
 bool gl_video_check_format(struct gl_video *p, int mp_format);
 void gl_video_config(struct gl_video *p, struct mp_image_params *params);
 void gl_video_set_output_depth(struct gl_video *p, int r, int g, int b);
-void gl_video_set_lut3d(struct gl_video *p, struct lut3d *lut3d);
 void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame, int fbo);
 void gl_video_resize(struct gl_video *p, int vp_w, int vp_h,
                      struct mp_rect *src, struct mp_rect *dst,
@@ -133,6 +178,8 @@ void gl_video_set_debug(struct gl_video *p, bool enable);
 float gl_video_scale_ambient_lux(float lmin, float lmax,
                                  float rmin, float rmax, float lux);
 void gl_video_set_ambient_lux(struct gl_video *p, int lux);
+void gl_video_set_icc_profile(struct gl_video *p, bstr icc_data);
+bool gl_video_icc_auto_enabled(struct gl_video *p);
 
 void gl_video_set_gl_state(struct gl_video *p);
 void gl_video_unset_gl_state(struct gl_video *p);

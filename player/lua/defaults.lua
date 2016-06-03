@@ -145,7 +145,7 @@ local function update_key_bindings()
         end
         local cfg = ""
         for k, v in pairs(key_bindings) do
-            if v.forced ~= def then
+            if v.bind and v.forced ~= def then
                 cfg = cfg .. v.bind .. "\n"
             end
         end
@@ -161,7 +161,6 @@ local function add_binding(attrs, key, name, fn, rp)
         fn = name
         name = reserve_binding()
     end
-    local bind = key
     local repeatable = rp == "repeatable" or rp["repeatable"]
     if rp["forced"] then
         attrs.forced = true
@@ -205,7 +204,9 @@ local function add_binding(attrs, key, name, fn, rp)
         end
         msg_cb = fn
     end
-    attrs.bind = bind .. " script-binding " .. mp.script_name .. "/" .. name
+    if key and #key > 0 then
+        attrs.bind = key .. " script-binding " .. mp.script_name .. "/" .. name
+    end
     attrs.name = name
     key_bindings[name] = attrs
     update_key_bindings()
@@ -272,6 +273,10 @@ function timer_mt.resume(t)
         t.next_deadline = mp.get_time() + timeout
         timers[t] = t
     end
+end
+
+function timer_mt.is_enabled(t)
+    return timers[t] ~= nil
 end
 
 -- Return the timer that expires next.
@@ -438,7 +443,7 @@ local function call_event_handlers(e)
     end
 end
 
-mp.use_suspend = true
+mp.use_suspend = false
 
 function mp.dispatch_events(allow_wait)
     local more_events = true

@@ -105,7 +105,7 @@ Available video output drivers are:
         Select deinterlacing mode (default: 0). In older versions (as well as
         MPlayer/mplayer2) you could use this option to enable deinterlacing.
         This doesn't work anymore, and deinterlacing is enabled with either
-        the ``D`` key (by default mapped to the command ``cycle deinterlace``),
+        the ``d`` key (by default mapped to the command ``cycle deinterlace``),
         or the ``--deinterlace`` option. Also, to select the default deint mode,
         you should use something like ``--vf-defaults=vdpaupp:deint-mode=temporal``
         instead of this sub-option.
@@ -311,7 +311,10 @@ Available video output drivers are:
         of bad or old hardware.
 
         This mode is forced automatically if needed, and this option is mostly
-        useful for debugging.
+        useful for debugging. It's also enabled automatically if nothing uses
+        features which require FBOs.
+
+        This option might be silently removed in the future.
 
     ``scale=<filter>``
 
@@ -428,17 +431,28 @@ Available video output drivers are:
             Scale parameter (t). Increasing this makes the window wider.
             Defaults to 1.
 
+    ``scaler-lut-size=<4..10>``
+        Set the size of the lookup texture for scaler kernels (default: 6).
+        The actual size of the texture is ``2^N`` for an option value of ``N``.
+        So the lookup texture with the default setting uses 64 samples.
+
+        All weights are bilinearly interpolated from those samples, so
+        increasing the size of lookup table might improve the accuracy of
+        scaler.
+
     ``scaler-resizes-only``
         Disable the scaler if the video image is not resized. In that case,
         ``bilinear`` is used instead whatever is set with ``scale``. Bilinear
         will reproduce the source image perfectly if no scaling is performed.
-        Note that this option never affects ``cscale``.
+        Enabled by default. Note that this option never affects ``cscale``.
 
     ``pbo``
-        Enable use of PBOs. This is slightly faster, but can sometimes lead to
-        sporadic and temporary image corruption (in theory, because reupload
-        is not retried when it fails), and perhaps actually triggers slower
-        paths with drivers that don't support PBOs properly.
+        Enable use of PBOs. On some drivers this can be faster, especially if
+        the source video size is huge (e.g. so called "4K" video). On other
+        drivers it might be slower or cause latency issues.
+
+        In theory, this can sometimes lead to sporadic and temporary image
+        corruption (because reupload is not retried when it fails).
 
     ``dither-depth=<N|no|auto>``
         Set dither target depth to N. Default: no.
@@ -469,7 +483,7 @@ Available video output drivers are:
 
     ``temporal-dither``
         Enable temporal dithering. (Only active if dithering is enabled in
-        general.) This changes between 8 different dithering pattern on each
+        general.) This changes between 8 different dithering patterns on each
         frame by changing the orientation of the tiled dithering matrix.
         Unfortunately, this can lead to flicker on LCD displays, since these
         have a high reaction time.
@@ -480,13 +494,17 @@ Available video output drivers are:
         video frame, 2 on every other frame, etc.
 
     ``debug``
-        Check for OpenGL errors, i.e. call ``glGetError()``. Also request a
+        Check for OpenGL errors, i.e. call ``glGetError()``. Also, request a
         debug OpenGL context (which does nothing with current graphics drivers
         as of this writing).
 
     ``interpolation``
         Reduce stuttering caused by mismatches in the video fps and display
         refresh rate (also known as judder).
+
+        .. warning:: This requires setting the ``--video-sync`` option to one
+                     of the ``display-`` modes, or it will be silently disabled.
+                     This was not required before mpv 0.14.0.
 
         This essentially attempts to interpolate the missing frames by
         convoluting the video along the temporal axis. The filter used can be
@@ -519,7 +537,7 @@ Available video output drivers are:
         The filter used for interpolating the temporal axis (frames). This is
         only used if ``interpolation`` is enabled. The only valid choices
         for ``tscale`` are separable convolution filters (use ``tscale=help``
-        to get a list). The default is ``oversample``.
+        to get a list). The default is ``mitchell``.
 
         Note that the maximum supported filter radius is currently 3, due to
         limitations in the number of video textures that can be loaded
@@ -530,6 +548,20 @@ Available video output drivers are:
         excessive ringing artifacts in the temporal domain (which typically
         manifest themselves as short flashes or fringes of black, mostly
         around moving edges) in exchange for potentially adding more blur.
+
+    ``interpolation-threshold=<0..1,-1>``
+        Threshold below which frame ratio interpolation gets disabled (default:
+        ``0.0001``). This is calculated as ``abs(disphz/vfps - 1) < threshold``,
+        where ``vfps`` is the speed-adjusted display FPS, and ``disphz`` the
+        display refresh rate.
+
+        The default is intended to almost always enable interpolation if the
+        playback rate is even slightly different from the display refresh rate.
+        But note that if you use e.g. ``--video-sync=display-vdrop``, small
+        deviations in the rate can disable interpolation and introduce a
+        discontinuity every other minute.
+
+        Set this to ``-1`` to disable this logic.
 
     ``dscale-radius``, ``cscale-radius``, ``tscale-radius``, etc.
         Set filter parameters for ``dscale``, ``cscale`` and ``tscale``,
@@ -543,18 +575,17 @@ Available video output drivers are:
 
     ``correct-downscaling``
         When using convolution based filters, extend the filter size
-        when downscaling. Trades quality for reduced downscaling performance.
+        when downscaling. Increases quality, but reduces performance while
+        downscaling.
 
         This will perform slightly sub-optimally for anamorphic video (but still
         better than without it) since it will extend the size to match only the
         milder of the scale factors between the axes.
 
-    ``prescale=<filter>``
-        This option provides non-convolution-based filters for upscaling. These
-        filters resize the video to multiple of the original size (all currently
-        supported prescalers can only perform image doubling in a single pass).
-        Generally another convolution based filter (the main scaler) will be
-        applied after prescaler to match the target display size.
+    ``prescale-luma=<filter>``
+        Apply additional pre-scaling (image doubling) on the luma plane
+        (if present). As the name implies, these will run before the main
+        upscaling pass.
 
         ``none``
             Disable all prescalers. This is the default.
@@ -571,10 +602,6 @@ Available video output drivers are:
 
             Extremely slow and requires a recent mid or high end graphics card
             to work smoothly (as of 2015).
-
-        Note that all the filters above are designed (or implemented) to process
-        luma plane only and probably won't work as intended for video in RGB
-        format.
 
     ``prescale-passes=<1..5>``
         The number of passes to apply the prescaler (defaults to be 1). Setting
@@ -610,11 +637,11 @@ Available video output drivers are:
 
         ``ubo``
             Upload these weights via uniform buffer objects. This is the
-            default. (requires OpenGL 3.1)
+            default. (requires OpenGL 3.1 / GLES 3.0)
 
         ``shader``
             Hard code all the weights into the shader source code. (requires
-            OpenGL 3.3)
+            OpenGL 3.3 / GLES 3.0)
 
 
     ``pre-shaders=<files>``, ``post-shaders=<files>``, ``scale-shader=<file>``
@@ -638,7 +665,11 @@ Available video output drivers are:
 
         These files must define a function with the following signature::
 
-            vec4 sample(sampler2D tex, vec2 pos, vec2 tex_size)
+            vec4 sample_pixel(sampler2D tex, vec2 pos, vec2 tex_size)
+
+        (If there is no string ``sample_pixel`` in the shader script, it will
+        use ``sample`` instead. This is a compatibility hack for older shader
+        scripts, and is deprecated.)
 
         The meanings of the parameters are as follows:
 
@@ -668,6 +699,145 @@ Available video output drivers are:
                 vec4 color = texture(tex, pos);
                 return vec4(1.0 - color.rgb, color.a);
             }
+
+    ``user-shaders=<files>``
+        Custom GLSL hooks. These are similar to ``post-shaders`` etc., but more
+        flexible: They can be injected at almost arbitrary points in the
+        rendering pipeline, and access all previous intermediate textures.
+
+        .. admonition:: Warning
+
+            The syntax is not stable yet and may change any time.
+
+        The general syntax of a user shader looks like this::
+
+            //!METADATA ARGS...
+            //!METADATA ARGS...
+
+            vec4 hook() {
+               ...
+               return something;
+            }
+
+            //!METADATA ARGS...
+            //!METADATA ARGS...
+
+            ...
+
+        Each block of metadata, along with the non-metadata lines after it,
+        defines a single pass. Each pass can set the following metadata:
+
+        HOOK <name> (required)
+            The texture which to hook into. May occur multiple times within a
+            metadata block, up to a predetermined limit. See below for a list
+            of hookable textures.
+
+        BIND <name>
+            Loads a texture and makes it available to the pass, and sets up
+            macros to enable accessing it. See below for a list of set macros.
+            By default, no textures are bound. The special name HOOKED can be
+            used to refer to the texture that triggered this pass.
+
+        SAVE <name>
+            Gives the name of the texture to save the result of this pass
+            into. By default, this is set to the special name HOOKED which has
+            the effect of overwriting the hooked texture.
+
+        WIDTH <szexpr>, HEIGHT <szexpr>
+            Specifies the size of the resulting texture for this pass.
+            ``szexpr`` refers to an expression in RPN (reverse polish
+            notation), using the operators + - * /, floating point literals,
+            and references to existing texture sizes such as MAIN.width or
+            CHROMA.height. By default, these are set to HOOKED.w and HOOKED.h,
+            respectively.
+
+        OFFSET ox oy
+            Indicates a pixel shift (offset) introduced by this pass. These
+            pixel offsets will be accumulated and corrected during the
+            next scaling pass (``cscale`` or ``scale``). The default values
+            are 0 0 which correspond to no shift. Note that offsets are ignored
+            when not overwriting the hooked texture.
+
+        COMPONENTS n
+            Specifies how many components of this pass's output are relevant
+            and should be stored in the texture, up to 4 (rgba). By default,
+            this value is equal to the number of components in HOOKED.
+
+        Each bound texture (via ``BIND``) will make available the following
+        definitions to that shader pass, where NAME is the name of the bound
+        texture:
+
+        vec4 NAME_tex(vec2 pos)
+            The sampling function to use to access the texture at a certain
+            spot (in texture coordinate space, range [0,1]). This takes care
+            of any necessary normalization conversions.
+        vec4 NAME_texOff(vec2 offset)
+            Sample the texture at a certain offset in pixels. This works like
+            NAME_tex but additionally takes care of necessary rotations, so
+            that sampling at e.g. vec2(-1,0) is always one pixel to the left.
+        vec2 NAME_pos
+            The local texture coordinate of that texture, range [0,1].
+        vec2 NAME_size
+            The (rotated) size in pixels of the texture.
+        mat2 NAME_rot
+            The rotation matrix associated with this texture. (Rotates
+            pixel space to texture coordinates)
+        vec2 NAME_pt
+            The (unrotated) size of a single pixel, range [0,1].
+        sampler NAME_raw
+            The raw bound texture itself. The use of this should be
+            avoided unless absolutely necessary.
+
+        In addition, the global uniforms described in ``post-shaders`` are
+        also available.
+
+        Internally, vo_opengl may generate any number of the following
+        textures. Whenever a texture is rendered and saved by vo_opengl, all of
+        the passes that have hooked into it will run, in the order they were
+        added by the user. This is a list of the legal hook points:
+
+        RGB, LUMA, CHROMA, ALPHA, XYZ (resizable)
+            Source planes (raw). Which of these fire depends on the image
+            format of the source.
+
+        CHROMA_SCALED, ALPHA_SCALED (fixed)
+            Source planes (upscaled). These only fire on subsampled content.
+
+        NATIVE (resizable)
+            The combined image, in the source colorspace, before conversion
+            to RGB.
+
+        MAINPRESUB (resizable)
+            The image, after conversion to RGB, but before
+            ``blend-subtitles=video`` is applied.
+
+        MAIN (resizable)
+            The main image, after conversion to RGB but before upscaling.
+
+        LINEAR (fixed)
+            Linear light image, before scaling. This only fires when
+            ``linear-scaling`` is in effect.
+
+        SIGMOID (fixed)
+            Sigmoidized light, before scaling. This only fires when
+            ``sigmoid-upscaling`` is in effect.
+
+        PREKERNEL (fixed)
+            The image immediately before the scaler kernel runs.
+
+        POSTKERNEL (fixed)
+            The image immediately after the scaler kernel runs.
+
+        SCALED (fixed)
+            The final upscaled image, before color management.
+
+        OUTPUT (fixed)
+            The final output image, after color management but before
+            dithering and drawing to screen.
+
+        Only the textures labelled with ``resizable`` may be transformed by the
+        pass. When overwriting a texture marked ``fixed``, the WIDTH, HEIGHT
+        and OFFSET must be left at their default values.
 
     ``deband``
         Enable the debanding algorithm. This greatly reduces the amount of
@@ -724,7 +894,7 @@ Available video output drivers are:
 
     ``glfinish``
         Call ``glFinish()`` before and after swapping buffers (default: disabled).
-        Slower, but might help getting better results when doing framedropping.
+        Slower, but might improve results when doing framedropping.
         Can completely ruin performance. The details depend entirely on the
         OpenGL driver.
 
@@ -753,9 +923,9 @@ Available video output drivers are:
         The value ``auto`` will try to determine whether the compositor is
         active, and calls ``DwmFlush`` only if it seems to be.
 
-        This may help getting more consistent frame intervals, especially with
-        high-fps clips - which might also reduce dropped frames. Typically a
-        value of ``windowed`` should be enough since full screen may bypass the
+        This may help to get more consistent frame intervals, especially with
+        high-fps clips - which might also reduce dropped frames. Typically, a
+        value of ``windowed`` should be enough, since full screen may bypass the
         DWM.
 
         Windows only.
@@ -774,6 +944,14 @@ Available video output drivers are:
             Cocoa/OS X
         win
             Win32/WGL
+        angle
+            Direct3D11 through the OpenGL ES translation layer ANGLE. This
+            supports almost everything the ``win`` backend does (if the ANGLE
+            build is new enough), except the ``nnedi3`` prescaler.
+        dxinterop (experimental)
+            Win32, using WGL for rendering and Direct3D 9Ex for presentation.
+            Works on Nvidia and AMD. Newer Intel chips with the latest drivers
+            may also work.
         x11
             X11/GLX
         wayland
@@ -783,15 +961,24 @@ Available video output drivers are:
         x11egl
             X11/EGL
 
-    ``es``
-        Force or prefer GLES2/3 over desktop OpenGL, if supported.
+    ``es=<mode>``
+        Select whether to use GLES:
+
+        yes
+            Try to prefer ES over Desktop GL
+        no
+            Try to prefer desktop GL over ES
+        auto
+            Use the default for each backend (default)
 
     ``fbo-format=<fmt>``
         Selects the internal format of textures used for FBOs. The format can
         influence performance and quality of the video output.
-        ``fmt`` can be one of: rgb, rgba, rgb8, rgb10, rgb10_a2, rgb16, rgb16f,
+        ``fmt`` can be one of: rgb8, rgb10, rgb10_a2, rgb16, rgb16f,
         rgb32f, rgba12, rgba16, rgba16f, rgba32f.
-        Default: rgba16.
+        Default: ``auto``, which maps to rgba16 on desktop GL, and rgba16f or
+        rgb10_a2 on GLES (e.g. ANGLE), unless GL_EXT_texture_norm16 is
+        available.
 
     ``gamma=<0.1..2.0>``
         Set a gamma value (default: 1.0). If gamma is adjusted in other ways
@@ -807,6 +994,10 @@ Available video output drivers are:
         0.8
             Pitch black room
 
+        NOTE: Typical movie content (Blu-ray etc.) already contains a gamma
+        drop of about 0.8, so specifying it here as well will result in even
+        even darker image than intended!
+
     ``gamma-auto``
         Automatically corrects the gamma value depending on ambient lighting
         conditions (adding a gamma boost for dark rooms).
@@ -817,8 +1008,9 @@ Available video output drivers are:
         NOTE: Only implemented on OS X.
 
     ``target-prim=<value>``
-        Specifies the primaries of the display. Video colors will be adapted
-        to this colorspace if necessary. Valid values are:
+        Specifies the primaries of the display. Video colors will be adapted to
+        this colorspace when ICC color management is not being used. Valid
+        values are:
 
         auto
             Disable any adaptation (default)
@@ -840,15 +1032,18 @@ Available video output drivers are:
             ProPhoto RGB (ROMM)
         cie1931
             CIE 1931 RGB (not to be confused with CIE XYZ)
+        dci-p3
+            DCI-P3 (Digital Cinema Colorspace), SMPTE RP431-2
 
     ``target-trc=<value>``
         Specifies the transfer characteristics (gamma) of the display. Video
-        colors will be adjusted to this curve. Valid values are:
+        colors will be adjusted to this curve when ICC color management is
+        not being used. Valid values are:
 
         auto
             Disable any adaptation (default)
         bt.1886
-            ITU-R BT.1886 curve, without the brightness drop (approx. 1.961)
+            ITU-R BT.1886 curve (assuming infinite contrast)
         srgb
             IEC 61966-2-4 (sRGB)
         linear
@@ -861,9 +1056,51 @@ Available video output drivers are:
             Pure power curve (gamma 2.8), also used for BT.470-BG
         prophoto
             ProPhoto RGB (ROMM)
+        st2084
+            SMPTE ST2084 (HDR) curve, PQ OETF
+
+    ``target-brightness=<1..100000>``
+        Specifies the display's approximate brightness in cd/m^2. When playing
+        HDR content on a SDR display (or SDR content on an HDR display), video
+        colors will be tone mapped to this target brightness using the
+        algorithm specified by ``hdr-tone-mapping``. The default of 250 cd/m^2
+        corresponds to a typical consumer display.
+
+    ``hdr-tone-mapping=<value>``
+        Specifies the algorithm used for tone-mapping HDR images onto the
+        target display. Valid values are:
+
+        clip
+            Hard-clip any out-of-range values.
+        reinhard
+            Reinhard tone mapping algorithm. Very simple continuous curve.
+            Preserves dynamic range and peak but uses nonlinear contrast.
+        hable
+            Similar to ``reinhard`` but preserves dark contrast better
+            (slightly sigmoidal). Developed by John Hable for use in video
+            games. (default)
+        gamma
+            Fits a logarithmic transfer between the tone curves.
+        linear
+            Linearly stretches the entire reference gamut to (a linear multiple
+            of) the display.
+
+    ``tone-mapping-param=<value>``
+        Set tone mapping parameters. Ignored if the tone mapping algorithm is
+        not tunable. This affects the following tone mapping algorithms:
+
+        reinhard
+            Specifies the local contrast coefficient at the display peak.
+            Defaults to 0.5, which means that in-gamut values will be about
+            half as bright as when clipping.
+        gamma
+            Specifies the exponent of the function. Defaults to 1.8.
+        linear
+            Specifies the scale factor to use while stretching. Defaults to
+            1.0.
 
     ``icc-profile=<file>``
-        Load an ICC profile and use it to transform linear RGB to screen output.
+        Load an ICC profile and use it to transform video RGB to screen output.
         Needs LittleCMS 2 support compiled in. This option overrides the
         ``target-prim``, ``target-trc`` and ``icc-profile-auto`` options.
 
@@ -871,7 +1108,8 @@ Available video output drivers are:
         Automatically select the ICC display profile currently specified by
         the display settings of the operating system.
 
-        NOTE: Only implemented on OS X and X11
+        NOTE: On Windows, the default profile must be an ICC profile. WCS
+        profiles are not supported.
 
     ``icc-cache-dir=<dirname>``
         Store and load the 3D LUTs created from the ICC profile in this directory.
@@ -900,6 +1138,13 @@ Available video output drivers are:
         Default is 128x256x64.
         Sizes must be a power of two, and 512 at most.
 
+    ``icc-contrast=<0-100000>``
+        Specifies an upper limit on the target device's contrast ratio.
+        This is detected automatically from the profile if possible, but for
+        some profiles it might be missing, causing the contrast to be assumed
+        as infinite. As a result, video may appear darker than intended. This
+        only affects BT.1886 content. The default of 0 means no limit.
+
     ``blend-subtitles=<yes|video|no>``
         Blend subtitles directly onto upscaled video frames, before
         interpolation and/or color management (default: no). Enabling this
@@ -922,9 +1167,11 @@ Available video output drivers are:
                      things like softsubbed ASS signs to match the video colors,
                      but may cause SRT subtitles or similar to look slightly off.
 
-    ``alpha=<blend|yes|no>``
-        Decides what to do if the input has an alpha component (default: blend).
+    ``alpha=<blend-tiles|blend|yes|no>``
+        Decides what to do if the input has an alpha component.
 
+        blend-tiles
+            Blend the frame against a 16x16 gray/white tiles background (default).
         blend
             Blend the frame against a black background.
         yes
@@ -951,7 +1198,7 @@ Available video output drivers are:
 
     This is equivalent to::
 
-        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:correct-downscaling:sigmoid-upscaling:pbo:deband
+        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:correct-downscaling:sigmoid-upscaling:deband:es=no
 
     Note that some cheaper LCDs do dithering that gravely interferes with
     ``opengl``'s dithering. Disabling dithering with ``dither-depth=no`` helps.
@@ -991,7 +1238,7 @@ Available video output drivers are:
 
     ``deint-mode=<mode>``
         Select deinterlacing algorithm. Note that by default deinterlacing is
-        initially always off, and needs to be enabled with the ``D`` key
+        initially always off, and needs to be enabled with the ``d`` key
         (default key binding for ``cycle deinterlace``).
 
         This option doesn't apply if libva supports video post processing (vpp).
@@ -1112,6 +1359,10 @@ Available video output drivers are:
         Whether to render a black background behind the video (default: no).
         Normally it's better to kill the console framebuffer instead, which
         gives better performance.
+
+    ``osd=<yes|no>``
+        Enabled by default. If disabled with ``no``, no OSD layer is created.
+        This also means there will be no subtitles rendered.
 
 ``drm`` (Direct Rendering Manager)
     Video output driver using Kernel Mode Setting / Direct Rendering Manager.

@@ -3,18 +3,18 @@
  *
  * Copyright (c) 2015 Sebastien Zwickert
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <libavcodec/version.h>
@@ -27,13 +27,12 @@
 #include "config.h"
 
 
-static int probe(struct vd_lavc_hwdec *hwdec, struct mp_hwdec_info *info,
-                 const char *decoder)
+static int probe(struct lavc_ctx *ctx, struct vd_lavc_hwdec *hwdec,
+                 const char *codec)
 {
-    hwdec_request_api(info, "videotoolbox");
-    if (!info || !info->hwctx)
+    if (!hwdec_devices_load(ctx->hwdec_devs, HWDEC_VIDEOTOOLBOX))
         return HWDEC_ERR_NO_CTX;
-    switch (mp_codec_to_av_codec_id(decoder)) {
+    switch (mp_codec_to_av_codec_id(codec)) {
     case AV_CODEC_ID_H264:
     case AV_CODEC_ID_H263:
     case AV_CODEC_ID_MPEG1VIDEO:
@@ -88,9 +87,11 @@ static int init_decoder(struct lavc_ctx *ctx, int w, int h)
     av_videotoolbox_default_free(ctx->avctx);
 
     AVVideotoolboxContext *vtctx = av_videotoolbox_alloc_context();
-    vtctx->cv_pix_fmt_type = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-    int err = av_videotoolbox_default_init2(ctx->avctx, vtctx);
 
+    struct mp_vt_ctx *vt = hwdec_devices_load(ctx->hwdec_devs, HWDEC_VIDEOTOOLBOX);
+    vtctx->cv_pix_fmt_type = vt->get_vt_fmt(vt);
+
+    int err = av_videotoolbox_default_init2(ctx->avctx, vtctx);
     if (err < 0) {
         print_videotoolbox_error(ctx->log, MSGL_ERR, "failed to init videotoolbox decoder", err);
         return -1;
@@ -105,6 +106,15 @@ static void uninit(struct lavc_ctx *ctx)
         av_videotoolbox_default_free(ctx->avctx);
 }
 
+static struct mp_image *process_image(struct lavc_ctx *ctx, struct mp_image *img)
+{
+    if (img->imgfmt == IMGFMT_VIDEOTOOLBOX) {
+        CVPixelBufferRef pbuf = (CVPixelBufferRef)img->planes[3];
+        img->params.hw_subfmt = CVPixelBufferGetPixelFormatType(pbuf);
+    }
+    return img;
+}
+
 const struct vd_lavc_hwdec mp_vd_lavc_videotoolbox = {
     .type = HWDEC_VIDEOTOOLBOX,
     .image_format = IMGFMT_VIDEOTOOLBOX,
@@ -112,4 +122,5 @@ const struct vd_lavc_hwdec mp_vd_lavc_videotoolbox = {
     .init = init,
     .uninit = uninit,
     .init_decoder = init_decoder,
+    .process_image = process_image,
 };

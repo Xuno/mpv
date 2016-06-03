@@ -1,20 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * Parts based on the MPlayer VA-API patch (see vo_vaapi.c).
- *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stddef.h>
@@ -67,22 +65,45 @@ static VADisplay *create_wayland_va_display(GL *gl)
 }
 #endif
 
+#if HAVE_VAAPI_DRM
+#include <va/va_drm.h>
+
+static VADisplay *create_drm_va_display(GL *gl)
+{
+    int drm_fd = (intptr_t)gl->MPGetNativeDisplay("drm");
+    // Note: yes, drm_fd==0 could be valid - but it's rare and doesn't fit with
+    //       our slightly crappy way of passing it through, so consider 0 not
+    //       valid.
+    return drm_fd ? vaGetDisplayDRM(drm_fd) : NULL;
+}
+#endif
+
+struct va_create_native {
+    VADisplay *(*create)(GL *gl);
+};
+
+static const struct va_create_native create_native_cbs[] = {
+#if HAVE_VAAPI_X11
+    {create_x11_va_display},
+#endif
+#if HAVE_VAAPI_WAYLAND
+    {create_wayland_va_display},
+#endif
+#if HAVE_VAAPI_DRM
+    {create_drm_va_display},
+#endif
+};
+
 static VADisplay *create_native_va_display(GL *gl)
 {
     if (!gl->MPGetNativeDisplay)
         return NULL;
-    VADisplay *display = NULL;
-#if HAVE_VAAPI_X11
-    display = create_x11_va_display(gl);
-    if (display)
-        return display;
-#endif
-#if HAVE_VAAPI_WAYLAND
-    display = create_wayland_va_display(gl);
-    if (display)
-        return display;
-#endif
-    return display;
+    for (int n = 0; n < MP_ARRAY_SIZE(create_native_cbs); n++) {
+        VADisplay *display = create_native_cbs[n].create(gl);
+        if (display)
+            return display;
+    }
+    return NULL;
 }
 
 struct priv {
@@ -93,7 +114,7 @@ struct priv {
     EGLImageKHR images[4];
     VAImage current_image;
     bool buffer_acquired;
-    struct mp_image *current_ref;
+    int current_mpfmt;
 
     EGLImageKHR (EGLAPIENTRY *CreateImageKHR)(EGLDisplay, EGLContext,
                                               EGLenum, EGLClientBuffer,
@@ -104,7 +125,7 @@ struct priv {
 
 static bool test_format(struct gl_hwdec *hw);
 
-static void unref_image(struct gl_hwdec *hw)
+static void unmap_frame(struct gl_hwdec *hw)
 {
     struct priv *p = hw->priv;
     VAStatus status;
@@ -128,8 +149,6 @@ static void unref_image(struct gl_hwdec *hw)
         p->current_image.image_id = VA_INVALID_ID;
     }
 
-    mp_image_unrefp(&p->current_ref);
-
     va_unlock(p->ctx);
 }
 
@@ -146,33 +165,11 @@ static void destroy_textures(struct gl_hwdec *hw)
 static void destroy(struct gl_hwdec *hw)
 {
     struct priv *p = hw->priv;
-    unref_image(hw);
+    unmap_frame(hw);
     destroy_textures(hw);
+    if (p->ctx)
+        hwdec_devices_remove(hw->devs, &p->ctx->hwctx);
     va_destroy(p->ctx);
-}
-
-// Create an empty dummy VPP. This works around a weird bug that affects the
-// VA surface format, as it is reported by vaDeriveImage(). Before a VPP
-// context or a decoder context is created, the surface format will be reported
-// as YV12. Surfaces created after context creation will report NV12 (even
-// though surface creation does not take a context as argument!). Existing
-// surfaces will change their format from YV12 to NV12 as soon as the decoder
-// renders to them! Because we want know the surface format in advance (to
-// simplify our renderer configuration logic), we hope that this hack gives
-// us reasonable behavior.
-// See: https://bugs.freedesktop.org/show_bug.cgi?id=79848
-static void insane_hack(struct gl_hwdec *hw)
-{
-    struct priv *p = hw->priv;
-    VAConfigID config;
-    if (vaCreateConfig(p->display, VAProfileNone, VAEntrypointVideoProc,
-                       NULL, 0, &config) == VA_STATUS_SUCCESS)
-    {
-        // We want to keep this until the VADisplay is destroyed. It will
-        // implicitly free the context.
-        VAContextID context;
-        vaCreateContext(p->display, config, 0, 0, 0, NULL, 0, &context);
-    }
 }
 
 static int create(struct gl_hwdec *hw)
@@ -184,13 +181,15 @@ static int create(struct gl_hwdec *hw)
     p->current_image.buf = p->current_image.image_id = VA_INVALID_ID;
     p->log = hw->log;
 
-    if (hw->hwctx)
-        return -1;
-    if (!eglGetCurrentDisplay())
+    if (!eglGetCurrentContext())
         return -1;
 
-    if (!strstr(gl->extensions, "EXT_image_dma_buf_import") ||
-        !strstr(gl->extensions, "EGL_KHR_image_base") ||
+    const char *exts = eglQueryString(eglGetCurrentDisplay(), EGL_EXTENSIONS);
+    if (!exts)
+        return -1;
+
+    if (!strstr(exts, "EXT_image_dma_buf_import") ||
+        !strstr(exts, "EGL_KHR_image_base") ||
         !strstr(gl->extensions, "GL_OES_EGL_image") ||
         !(gl->mpgl_caps & MPGL_CAP_TEX_RG))
         return -1;
@@ -223,13 +222,13 @@ static int create(struct gl_hwdec *hw)
 
     MP_VERBOSE(p, "using VAAPI EGL interop\n");
 
-    insane_hack(hw);
     if (!test_format(hw)) {
         destroy(hw);
         return -1;
     }
 
-    hw->hwctx = &p->ctx->hwctx;
+    p->ctx->hwctx.driver_name = hw->driver->name;
+    hwdec_devices_add(hw->devs, &p->ctx->hwctx);
     return 0;
 }
 
@@ -241,8 +240,6 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
     // Recreate them to get rid of all previous image data (possibly).
     destroy_textures(hw);
 
-    assert(params->imgfmt == hw->driver->imgfmt);
-
     gl->GenTextures(4, p->gl_textures);
     for (int n = 0; n < 4; n++) {
         gl->BindTexture(GL_TEXTURE_2D, p->gl_textures[n]);
@@ -252,6 +249,20 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
         gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
     gl->BindTexture(GL_TEXTURE_2D, 0);
+
+    p->current_mpfmt = va_fourcc_to_imgfmt(params->hw_subfmt);
+    if (p->current_mpfmt != IMGFMT_NV12 &&
+        p->current_mpfmt != IMGFMT_420P)
+    {
+        MP_FATAL(p, "unsupported VA image format %s\n",
+                 mp_tag_str(params->hw_subfmt));
+        return -1;
+    }
+
+    MP_VERBOSE(p, "format: %s %s\n", mp_tag_str(params->hw_subfmt),
+               mp_imgfmt_to_name(p->current_mpfmt));
+
+    params->imgfmt = p->current_mpfmt;
 
     return 0;
 }
@@ -264,17 +275,15 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
     attribs[num_attribs] = EGL_NONE;                    \
     } while(0)
 
-static int map_image(struct gl_hwdec *hw, struct mp_image *hw_image,
-                     GLuint *out_textures)
+static int map_frame(struct gl_hwdec *hw, struct mp_image *hw_image,
+                     struct gl_hwdec_frame *out_frame)
 {
     struct priv *p = hw->priv;
     GL *gl = hw->gl;
     VAStatus status;
     VAImage *va_image = &p->current_image;
 
-    unref_image(hw);
-
-    mp_image_setrefp(&p->current_ref, hw_image);
+    unmap_frame(hw);
 
     va_lock(p->ctx);
 
@@ -283,21 +292,9 @@ static int map_image(struct gl_hwdec *hw, struct mp_image *hw_image,
         goto err;
 
     int mpfmt = va_fourcc_to_imgfmt(va_image->format.fourcc);
-    if (mpfmt != IMGFMT_NV12 && mpfmt != IMGFMT_420P) {
-        MP_FATAL(p, "unsupported VA image format %s\n",
-                 VA_STR_FOURCC(va_image->format.fourcc));
-        goto err;
-    }
-
-    if (!hw->converted_imgfmt) {
-        MP_VERBOSE(p, "format: %s %s\n", VA_STR_FOURCC(va_image->format.fourcc),
-                   mp_imgfmt_to_name(mpfmt));
-        hw->converted_imgfmt = mpfmt;
-    }
-
-    if (hw->converted_imgfmt != mpfmt) {
+    if (p->current_mpfmt != mpfmt) {
         MP_FATAL(p, "mid-stream hwdec format change (%s -> %s) not supported\n",
-                 mp_imgfmt_to_name(hw->converted_imgfmt), mp_imgfmt_to_name(mpfmt));
+                 mp_imgfmt_to_name(p->current_mpfmt), mp_imgfmt_to_name(mpfmt));
         goto err;
     }
 
@@ -336,12 +333,17 @@ static int map_image(struct gl_hwdec *hw, struct mp_image *hw_image,
         gl->BindTexture(GL_TEXTURE_2D, p->gl_textures[n]);
         p->EGLImageTargetTexture2DOES(GL_TEXTURE_2D, p->images[n]);
 
-        out_textures[n] = p->gl_textures[n];
+        out_frame->planes[n] = (struct gl_hwdec_plane){
+            .gl_texture = p->gl_textures[n],
+            .gl_target = GL_TEXTURE_2D,
+            .tex_w = mp_image_plane_w(&layout, n),
+            .tex_h = mp_image_plane_h(&layout, n),
+        };
     }
     gl->BindTexture(GL_TEXTURE_2D, 0);
 
     if (va_image->format.fourcc == VA_FOURCC_YV12)
-        MPSWAP(GLuint, out_textures[1], out_textures[2]);
+        MPSWAP(struct gl_hwdec_plane, out_frame->planes[1], out_frame->planes[2]);
 
     va_unlock(p->ctx);
     return 0;
@@ -349,7 +351,7 @@ static int map_image(struct gl_hwdec *hw, struct mp_image *hw_image,
 err:
     va_unlock(p->ctx);
     MP_FATAL(p, "mapping VAAPI EGL image failed\n");
-    unref_image(hw);
+    unmap_frame(hw);
     return -1;
 }
 
@@ -362,12 +364,13 @@ static bool test_format(struct gl_hwdec *hw)
     va_pool_set_allocator(alloc, p->ctx, VA_RT_FORMAT_YUV420);
     struct mp_image *surface = mp_image_pool_get(alloc, IMGFMT_VAAPI, 64, 64);
     if (surface) {
+        va_surface_init_subformat(surface);
         struct mp_image_params params = surface->params;
         if (reinit(hw, &params) >= 0) {
-            GLuint textures[4];
-            ok = map_image(hw, surface, textures) >= 0;
+            struct gl_hwdec_frame frame = {0};
+            ok = map_frame(hw, surface, &frame) >= 0;
         }
-        unref_image(hw);
+        unmap_frame(hw);
     }
     talloc_free(surface);
     talloc_free(alloc);
@@ -376,10 +379,12 @@ static bool test_format(struct gl_hwdec *hw)
 }
 
 const struct gl_hwdec_driver gl_hwdec_vaegl = {
-    .api_name = "vaapi",
+    .name = "vaapi-egl",
+    .api = HWDEC_VAAPI,
     .imgfmt = IMGFMT_VAAPI,
     .create = create,
     .reinit = reinit,
-    .map_image = map_image,
+    .map_frame = map_frame,
+    .unmap = unmap_frame,
     .destroy = destroy,
 };

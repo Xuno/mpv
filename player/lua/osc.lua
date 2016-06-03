@@ -20,7 +20,8 @@ local user_opts = {
     boxalpha = 80,              -- alpha of the background box,
                                 -- 0 (opaque) to 255 (fully transparent)
     hidetimeout = 500,          -- duration in ms until the OSC hides if no
-                                -- mouse movement, negative value = disabled
+                                -- mouse movement. enforced non-negative for the
+                                -- user, but internally negative is "always-on".
     fadeduration = 200,         -- duration of fade out in ms, 0 = no fade
     deadzonesize = 0,           -- size of deadzone
     minmousemove = 3,           -- minimum amount of pixels the mouse has to
@@ -32,10 +33,18 @@ local user_opts = {
     seekbarstyle = "slider",    -- slider (diamond marker) or bar (fill)
     timetotal = false,          -- display total time instead of remaining time?
     timems = false,             -- display timecodes with milliseconds?
+    visibility = "auto",        -- only used at init to set visibility_mode(...)
 }
 
+-- read_options may modify hidetimeout, so save the original default value in
+-- case the user set hidetimeout < 0 and we need the default instead.
+local hidetimeout_def = user_opts.hidetimeout
 -- read options from config and command-line
 opt.read_options(user_opts, "osc")
+if user_opts.hidetimeout < 0 then
+    user_opts.hidetimeout = hidetimeout_def
+    msg.warn("hidetimeout cannot be negative. Using " .. user_opts.hidetimeout)
+end
 
 local osc_param = { -- calculated by osc_init()
     playresy = 0,                           -- canvas size Y
@@ -90,6 +99,27 @@ local state = {
 -- Helperfunctions
 --
 
+-- scale factor for translating between real and virtual ASS coordinates
+function get_virt_scale_factor()
+    local w, h = mp.get_osd_size()
+    if w <= 0 or h <= 0 then
+        return 0, 0
+    end
+    return osc_param.playresx / w, osc_param.playresy / h
+end
+
+-- return mouse position in virtual ASS coordinates (playresx/y)
+function get_virt_mouse_pos()
+    local sx, sy = get_virt_scale_factor()
+    local x, y = mp.get_mouse_pos()
+    return x * sx, y * sy
+end
+
+function set_virt_mouse_area(x0, y0, x1, y1, name)
+    local sx, sy = get_virt_scale_factor()
+    mp.set_mouse_area(x0 / sx, y0 / sy, x1 / sx, y1 / sy, name)
+end
+
 function scale_value(x0, x1, y0, y1, val)
     local m = (y1 - y0) / (x1 - x0)
     local b = y0 - (m * x0)
@@ -132,7 +162,7 @@ function mouse_hit(element)
 end
 
 function mouse_hit_coords(bX1, bY1, bX2, bY2)
-    local mX, mY = mp.get_mouse_pos()
+    local mX, mY = get_virt_mouse_pos()
     return (mX >= bX1 and mX <= bX2 and mY >= bY1 and mY <= bY2)
 end
 
@@ -173,7 +203,7 @@ end
 
 -- get value at current mouse position
 function get_slider_value(element)
-    return get_slider_value_at(element, mp.get_mouse_pos())
+    return get_slider_value_at(element, get_virt_mouse_pos())
 end
 
 function countone(val)
@@ -580,7 +610,7 @@ function render_elements(master_ass)
                     end
 
                     elem_ass:new_event()
-                    elem_ass:pos(mp.get_mouse_pos(), ty)
+                    elem_ass:pos(get_virt_mouse_pos(), ty)
                     elem_ass:an(an)
                     elem_ass:append(slider_lo.tooltip_style)
                     elem_ass:append(tooltiplabel)
@@ -1289,7 +1319,7 @@ function osc_init()
 
     -- set canvas resolution according to display aspect and scaling setting
     local baseResY = 720
-    local display_w, display_h, display_aspect = mp.get_screen_size()
+    local display_w, display_h, display_aspect = mp.get_osd_size()
     local scale = 1
 
     if (mp.get_property("video") == "no") then -- dummy/forced window
@@ -1607,6 +1637,9 @@ end
 
 
 function show_osc()
+    -- show when disabled can happen (e.g. mouse_move) due to async/delayed unbinding
+    if not state.enabled then return end
+
     msg.debug("show_osc")
     --remember last time of invocation (mouse move)
     state.showtime = mp.get_time()
@@ -1616,12 +1649,17 @@ function show_osc()
     if (user_opts.fadeduration > 0) then
         state.anitype = nil
     end
-
 end
 
 function hide_osc()
     msg.debug("hide_osc")
-    if (user_opts.fadeduration > 0) then
+    if not state.enabled then
+        -- typically hide happens at render() from tick(), but now tick() is
+        -- no-op and won't render again to remove the osc, so do that manually.
+        state.osc_visible = false
+        timer_stop()
+        render() -- state.osc_visible == false -> remove the osc from screen
+    elseif (user_opts.fadeduration > 0) then
         if not(state.osc_visible == false) then
             state.anitype = "out"
             control_timer()
@@ -1688,7 +1726,9 @@ end
 
 
 function mouse_leave()
-    hide_osc()
+    if user_opts.hidetimeout >= 0 then
+        hide_osc()
+    end
     -- reset mouse position
     state.last_mouseX, state.last_mouseY = nil, nil
 end
@@ -1699,8 +1739,8 @@ end
 
 function render()
     msg.debug("rendering")
-    local current_screen_sizeX, current_screen_sizeY, aspect = mp.get_screen_size()
-    local mouseX, mouseY = mp.get_mouse_pos()
+    local current_screen_sizeX, current_screen_sizeY, aspect = mp.get_osd_size()
+    local mouseX, mouseY = get_virt_mouse_pos()
     local now = mp.get_time()
 
     -- check if display changed, if so request reinit
@@ -1763,7 +1803,7 @@ function render()
 
     --mouse show/hide area
     for k,cords in pairs(osc_param.areas["showhide"]) do
-        mp.set_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "showhide")
+        set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "showhide")
     end
     do_enable_keybindings()
 
@@ -1772,7 +1812,7 @@ function render()
 
     for _,cords in ipairs(osc_param.areas["input"]) do
         if state.osc_visible then -- activate only when OSC is actually visible
-            mp.set_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "input")
+            set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "input")
         end
         if state.osc_visible ~= state.input_enabled then
             if state.osc_visible then
@@ -1868,7 +1908,7 @@ function process_event(source, what)
         state.mouse_down_counter = 0
 
     elseif source == "mouse_move" then
-        local mouseX, mouseY = mp.get_mouse_pos()
+        local mouseX, mouseY = get_virt_mouse_pos()
         if (user_opts.minmousemove == 0) or
             (not ((state.last_mouseX == nil) or (state.last_mouseY == nil)) and
                 ((math.abs(mouseX - state.last_mouseX) >= user_opts.minmousemove)
@@ -1958,9 +1998,8 @@ function enable_osc(enable)
     state.enabled = enable
     if enable then
         do_enable_keybindings()
-        show_osc()
     else
-        hide_osc()
+        hide_osc() -- acts immediately when state.enabled == false
         if state.showhide_enabled then
             mp.disable_key_bindings("showhide")
         end
@@ -1973,9 +2012,6 @@ validate_user_opts()
 mp.register_event("start-file", request_init)
 mp.register_event("tracks-changed", request_init)
 mp.observe_property("playlist", nil, request_init)
-
-mp.register_script_message("enable-osc", function() enable_osc(true) end)
-mp.register_script_message("disable-osc", function() enable_osc(false) end)
 
 mp.register_script_message("osc-message", show_message)
 
@@ -2018,6 +2054,53 @@ mp.set_key_bindings({
     {"mouse_btn0_dbl",          "ignore"},
     {"shift+mouse_btn0_dbl",    "ignore"},
     {"mouse_btn2_dbl",          "ignore"},
-    {"del",                     function() enable_osc(false) end}
 }, "input", "force")
 mp.enable_key_bindings("input")
+
+
+user_opts.hidetimeout_orig = user_opts.hidetimeout
+
+function always_on(val)
+    if val then
+        user_opts.hidetimeout = -1 -- disable autohide
+        if state.enabled then show_osc() end
+    else
+        user_opts.hidetimeout = user_opts.hidetimeout_orig
+        if state.enabled then hide_osc() end
+    end
+end
+
+-- mode can be auto/always/never/cycle
+-- the modes only affect internal variables and not stored on its own.
+function visibility_mode(mode, no_osd)
+    if mode == "cycle" then
+        if not state.enabled then
+            mode = "auto"
+        elseif user_opts.hidetimeout >= 0 then
+            mode = "always"
+        else
+            mode = "never"
+        end
+    end
+
+    if mode == "auto" then
+        always_on(false)
+        enable_osc(true)
+    elseif mode == "always" then
+        enable_osc(true)
+        always_on(true)
+    elseif mode == "never" then
+        enable_osc(false)
+    else
+        msg.warn("Ignoring unknown visibility mode '" .. mode .. "'")
+        return
+    end
+
+    if not no_osd and tonumber(mp.get_property("osd-level")) >= 1 then
+        mp.osd_message("OSC visibility: " .. mode)
+    end
+end
+
+visibility_mode(user_opts.visibility, true)
+mp.register_script_message("osc-visibility", visibility_mode)
+mp.add_key_binding("del", function() visibility_mode("cycle") end)

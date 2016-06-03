@@ -3,11 +3,8 @@
 #include <string.h>
 
 #include "config.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "osd.h"
-
-const char *const osd_ass_0 = "";
-const char *const osd_ass_1 = "";
 
 void osd_init_backend(struct osd_state *osd)
 {
@@ -27,9 +24,7 @@ void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
     *out_imgs = (struct sub_bitmaps) {0};
 }
 
-void osd_object_get_resolution(struct osd_state *osd, int obj,
-                               int *out_w, int *out_h)
+void osd_set_external(struct osd_state *osd, void *id, int res_x, int res_y,
+                      char *text)
 {
-    *out_w = 0;
-    *out_h = 0;
 }

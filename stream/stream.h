@@ -67,11 +67,9 @@ enum stream_ctrl {
     STREAM_CTRL_GET_SIZE = 1,
 
     // Cache
-    STREAM_CTRL_GET_CACHE_SIZE,
+    STREAM_CTRL_GET_CACHE_INFO,
     STREAM_CTRL_SET_CACHE_SIZE,
-    STREAM_CTRL_GET_CACHE_FILL,
-    STREAM_CTRL_GET_CACHE_IDLE,
-    STREAM_CTRL_RESUME_CACHE,
+    STREAM_CTRL_SET_READAHEAD,
 
     // stream_memory.c
     STREAM_CTRL_SET_CONTENTS,
@@ -98,6 +96,8 @@ enum stream_ctrl {
     STREAM_CTRL_TV_STEP_CHAN,
     STREAM_CTRL_TV_LAST_CHAN,
     STREAM_CTRL_DVB_SET_CHANNEL,
+    STREAM_CTRL_DVB_SET_CHANNEL_NAME,
+    STREAM_CTRL_DVB_GET_CHANNEL_NAME,
     STREAM_CTRL_DVB_STEP_CHANNEL,
 
     // Optical discs
@@ -117,6 +117,14 @@ enum stream_ctrl {
     STREAM_CTRL_GET_LANG,
     STREAM_CTRL_GET_CURRENT_TITLE,
     STREAM_CTRL_SET_CURRENT_TITLE,
+};
+
+// for STREAM_CTRL_GET_CACHE_INFO
+struct stream_cache_info {
+    int64_t size;
+    int64_t fill;
+    bool idle;
+    int64_t speed;
 };
 
 struct stream_lang_req {

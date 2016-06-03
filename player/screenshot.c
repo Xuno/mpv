@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -23,7 +23,7 @@
 
 #include "osdep/io.h"
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "screenshot.h"
 #include "core.h"
 #include "command.h"
@@ -287,9 +287,10 @@ static char *gen_fname(screenshot_ctx *ctx, const char *file_ext)
             void *t = fname;
             dir = mp_get_user_path(t, ctx->mpctx->global, dir);
             fname = mp_path_join(NULL, dir, fname);
-            talloc_free(t);
 
             mp_mkdirp(dir);
+
+            talloc_free(t);
         }
 
         if (!mp_path_exists(fname))
@@ -308,14 +309,7 @@ static char *gen_fname(screenshot_ctx *ctx, const char *file_ext)
 
 static void add_subs(struct MPContext *mpctx, struct mp_image *image)
 {
-    double sar = (double)image->w / image->h;
-    double dar = (double)image->params.d_w / image->params.d_h;
-    struct mp_osd_res res = {
-        .w = image->w,
-        .h = image->h,
-        .display_par = sar / dar,
-    };
-
+    struct mp_osd_res res = osd_res_from_image_params(&image->params);
     osd_draw_on_image(mpctx->osd, res, mpctx->video_pts,
                       OSD_DRAW_SUB_ONLY, image);
 }
@@ -352,8 +346,9 @@ static struct mp_image *screenshot_get(struct MPContext *mpctx, int mode)
         }
     }
 
-    if (image && mpctx->d_video && mpctx->d_video->hwdec_info) {
-        struct mp_hwdec_ctx *ctx = mpctx->d_video->hwdec_info->hwctx;
+    if (image && mpctx->vo_chain && mpctx->vo_chain->hwdec_devs) {
+        struct mp_hwdec_ctx *ctx =
+            hwdec_devices_get_first(mpctx->vo_chain->hwdec_devs);
         struct mp_image *nimage = NULL;
         if (ctx && ctx->download_image && (image->fmt.flags & MP_IMGFLAG_HWACCEL))
             nimage = ctx->download_image(ctx, image, NULL);

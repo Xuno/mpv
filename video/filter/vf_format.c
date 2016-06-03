@@ -20,6 +20,8 @@
 #include <string.h>
 #include <inttypes.h>
 
+#include <libavutil/rational.h>
+
 #include "common/msg.h"
 #include "common/common.h"
 
@@ -36,6 +38,7 @@ struct vf_priv_s {
     int colorlevels;
     int primaries;
     int gamma;
+    float peak;
     int chroma_location;
     int stereo_in;
     int stereo_out;
@@ -92,6 +95,8 @@ static int reconfig(struct vf_instance *vf, struct mp_image_params *in,
         out->primaries = p->primaries;
     if (p->gamma)
         out->gamma = p->gamma;
+    if (p->peak)
+        out->peak = p->peak;
     if (p->chroma_location)
         out->chroma_location = p->chroma_location;
     if (p->stereo_in)
@@ -100,12 +105,16 @@ static int reconfig(struct vf_instance *vf, struct mp_image_params *in,
         out->stereo_out = p->stereo_out;
     if (p->rotate >= 0)
         out->rotate = p->rotate;
+
+    AVRational dsize;
+    mp_image_params_get_dsize(out, &dsize.num, &dsize.den);
     if (p->dw > 0)
-        out->d_w = p->dw;
+        dsize.num = p->dw;
     if (p->dh > 0)
-        out->d_h = p->dh;
+        dsize.den = p->dh;
     if (p->dar > 0)
-        vf_set_dar(&out->d_w, &out->d_h, out->w, out->h, p->dar);
+        dsize = av_d2q(p->dar, INT_MAX);
+    mp_image_params_set_dsize(out, dsize.num, dsize.den);
 
     // Make sure the user-overrides are consistent (no RGB csp for YUV, etc.).
     mp_image_params_guess_csp(out);
@@ -136,6 +145,7 @@ static const m_option_t vf_opts_fields[] = {
     OPT_CHOICE_C("colorlevels", colorlevels, 0, mp_csp_levels_names),
     OPT_CHOICE_C("primaries", primaries, 0, mp_csp_prim_names),
     OPT_CHOICE_C("gamma", gamma, 0, mp_csp_trc_names),
+    OPT_FLOAT("peak", peak, 0),
     OPT_CHOICE_C("chroma-location", chroma_location, 0, mp_chroma_names),
     OPT_CHOICE_C("stereo-in", stereo_in, 0, mp_stereo3d_names),
     OPT_CHOICE_C("stereo-out", stereo_out, 0, mp_stereo3d_names),

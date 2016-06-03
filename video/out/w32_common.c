@@ -15,13 +15,13 @@
  * with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <initguid.h>
 #include <stdio.h>
 #include <limits.h>
 #include <pthread.h>
 #include <assert.h>
 #include <windows.h>
 #include <windowsx.h>
-#include <initguid.h>
 #include <ole2.h>
 #include <shobjidl.h>
 #include <avrt.h>
@@ -30,6 +30,7 @@
 #include "input/keycodes.h"
 #include "input/input.h"
 #include "input/event.h"
+#include "stream/stream.h"
 #include "common/msg.h"
 #include "common/common.h"
 #include "vo.h"
@@ -42,7 +43,7 @@
 #include "osdep/atomics.h"
 #include "misc/dispatch.h"
 #include "misc/rendezvous.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 
 static const wchar_t classname[] = L"mpv";
 
@@ -63,6 +64,7 @@ struct vo_w32_state {
 
     HMONITOR monitor; // Handle of the current screen
     struct mp_rect screenrc; // Size and virtual position of the current screen
+    char *color_profile; // Path of the current screen's color profile
 
     // last non-fullscreen extends (updated only on fullscreen or on initialization)
     int prev_width;
@@ -105,6 +107,9 @@ struct vo_w32_state {
     int high_surrogate;
 
     ITaskbarList2 *taskbar_list;
+    ITaskbarList3 *taskbar_list3;
+    UINT tbtnCreatedMsg;
+    bool tbtnCreated;
 
     // updates on move/resize/displaychange
     double display_fps;
@@ -267,8 +272,9 @@ static HRESULT STDMETHODCALLTYPE DropTarget_Drop(IDropTarget* This,
     } else if (pDataObj->lpVtbl->GetData(pDataObj,
                                          &fmtetc_url, &medium) == S_OK) {
         // get the URL encoded in US-ASCII
-        char* url = (char*)GlobalLock(medium.hGlobal);
-        if (url != NULL) {
+        wchar_t* wurl = GlobalLock(medium.hGlobal);
+        if (wurl != NULL) {
+            char *url = mp_to_utf8(NULL, wurl);
             if (mp_event_drop_mime_data(t->w32->input_ctx, "text/uri-list",
                                         bstr0(url), action) > 0) {
                 MP_VERBOSE(t->w32, "received dropped URL: %s\n", url);
@@ -276,6 +282,7 @@ static HRESULT STDMETHODCALLTYPE DropTarget_Drop(IDropTarget* This,
                 MP_ERR(t->w32, "error getting dropped URL\n");
             }
 
+            talloc_free(url);
             GlobalUnlock(medium.hGlobal);
         }
 
@@ -603,7 +610,25 @@ static double get_refresh_rate_from_gdi(const wchar_t *device)
     return rv;
 }
 
-static void update_display_fps(struct vo_w32_state *w32)
+static char *get_color_profile(void *ctx, const wchar_t *device)
+{
+    char *name = NULL;
+
+    HDC ic = CreateICW(device, NULL, NULL, NULL);
+    if (!ic)
+        goto done;
+    wchar_t wname[MAX_PATH + 1];
+    if (!GetICMProfileW(ic, &(DWORD){ MAX_PATH }, wname))
+        goto done;
+
+    name = mp_to_utf8(ctx, wname);
+done:
+    if (ic)
+        DeleteDC(ic);
+    return name;
+}
+
+static void update_display_info(struct vo_w32_state *w32)
 {
     HMONITOR monitor = MonitorFromWindow(w32->window, MONITOR_DEFAULTTOPRIMARY);
     if (w32->monitor == monitor)
@@ -628,12 +653,26 @@ static void update_display_fps(struct vo_w32_state *w32)
         w32->display_fps = freq;
         signal_events(w32, VO_EVENT_WIN_STATE);
     }
+
+    char *color_profile = get_color_profile(w32, mi.szDevice);
+    if ((color_profile == NULL) != (w32->color_profile == NULL) ||
+        (color_profile && strcmp(color_profile, w32->color_profile)))
+    {
+        if (color_profile)
+            MP_VERBOSE(w32, "color-profile: %s\n", color_profile);
+        talloc_free(w32->color_profile);
+        w32->color_profile = color_profile;
+        color_profile = NULL;
+        signal_events(w32, VO_EVENT_ICC_PROFILE_CHANGED);
+    }
+
+    talloc_free(color_profile);
 }
 
-static void force_update_display_fps(struct vo_w32_state *w32)
+static void force_update_display_info(struct vo_w32_state *w32)
 {
     w32->monitor = 0;
-    update_display_fps(w32);
+    update_display_info(w32);
 }
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
@@ -661,7 +700,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         ClientToScreen(w32->window, &p);
         w32->window_x = p.x;
         w32->window_y = p.y;
-        update_display_fps(w32);  // if we moved between monitors
+        update_display_info(w32);  // if we moved between monitors
         MP_VERBOSE(w32, "move window: %d:%d\n", w32->window_x, w32->window_y);
         break;
     }
@@ -677,7 +716,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         // Window may have been minimized or restored
         signal_events(w32, VO_EVENT_WIN_STATE);
 
-        update_display_fps(w32);
+        update_display_info(w32);
         break;
     }
     case WM_SIZING:
@@ -822,8 +861,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         mouse_button |= MP_KEY_STATE_UP;
         break;
     case WM_DISPLAYCHANGE:
-        force_update_display_fps(w32);
+        force_update_display_info(w32);
         break;
+    }
+
+    if (message == w32->tbtnCreatedMsg) {
+        w32->tbtnCreated = true;
+        return 0;
     }
 
     if (mouse_button) {
@@ -1023,15 +1067,31 @@ static void reinit_window_state(struct vo_w32_state *w32)
 
     RECT cr = r;
     add_window_borders(w32->window, &r);
+    // Check on client area size instead of window size on --fit-border=no
+    long o_w;
+    long o_h;
+    if( w32->opts->fit_border ) {
+        o_w = r.right - r.left;
+        o_h = r.bottom - r.top;
+    } else {
+        o_w = cr.right - cr.left;
+        o_h = cr.bottom - cr.top;
+    }
 
-    if (!w32->current_fs &&
-        ((r.right - r.left) >= screen_w || (r.bottom - r.top) >= screen_h))
+    if ( !w32->current_fs && ( o_w > screen_w || o_h > screen_h ) )
     {
         MP_VERBOSE(w32, "requested window size larger than the screen\n");
         // Use the aspect of the client area, not the full window size.
         // Basically, try to compute the maximum window size.
-        long n_w = screen_w - (r.right - cr.right) - (cr.left - r.left) - 1;
-        long n_h = screen_h - (r.bottom - cr.bottom) - (cr.top - r.top) - 1;
+        long n_w;
+        long n_h;
+        if( w32->opts->fit_border ) {
+            n_w = screen_w - (r.right - cr.right) - (cr.left - r.left);
+            n_h = screen_h - (r.bottom - cr.bottom) - (cr.top - r.top);
+        } else {
+            n_w = screen_w;
+            n_h = screen_h;
+        }
         // Letterbox
         double asp = (cr.right - cr.left) / (double)(cr.bottom - cr.top);
         double s_asp = n_w / (double)n_h;
@@ -1040,15 +1100,28 @@ static void reinit_window_state(struct vo_w32_state *w32)
         } else {
             n_w = n_h * asp;
         }
+        // Save new size
+        w32->dw = n_w;
+        w32->dh = n_h;
+        // Get old window center
+        long o_cx = r.left + (r.right - r.left) / 2;
+        long o_cy = r.top + (r.bottom - r.top) / 2;
+        // Add window borders to the new window size
         r = (RECT){.right = n_w, .bottom = n_h};
         add_window_borders(w32->window, &r);
-        // Center the final window
+        // Get top and left border size for client area position calculation
+        long b_top = -r.top;
+        long b_left = -r.left;
+        // Center the final window around the old window center
         n_w = r.right - r.left;
         n_h = r.bottom - r.top;
-        r.left = w32->screenrc.x0 + screen_w / 2 - n_w / 2;
-        r.top = w32->screenrc.y0 + screen_h / 2 - n_h / 2;
+        r.left = o_cx - n_w / 2;
+        r.top = o_cy - n_h / 2;
         r.right = r.left + n_w;
         r.bottom = r.top + n_h;
+        // Save new client area position
+        w32->window_x = r.left + b_left;
+        w32->window_y = r.top + b_top;
     }
 
     MP_VERBOSE(w32, "reset window bounds: %d:%d:%d:%d\n",
@@ -1072,6 +1145,7 @@ static void gui_thread_reconfig(void *ptr)
     vo_apply_window_geometry(vo, &geo);
 
     bool reset_size = w32->o_dwidth != vo->dwidth || w32->o_dheight != vo->dheight;
+    bool pos_init = false;
 
     w32->o_dwidth = vo->dwidth;
     w32->o_dheight = vo->dheight;
@@ -1088,6 +1162,7 @@ static void gui_thread_reconfig(void *ptr)
         } else {
             w32->window_bounds_initialized = true;
             reset_size = true;
+            pos_init = true;
             w32->window_x = w32->prev_x = geo.win.x0;
             w32->window_y = w32->prev_y = geo.win.y0;
         }
@@ -1103,6 +1178,12 @@ static void gui_thread_reconfig(void *ptr)
         vo->dheight = r.bottom;
     }
 
+    // Recenter window around old position on new video size 
+    // excluding the case when initial positon handled by win_state.
+    if (!pos_init) {
+        w32->window_x += w32->dw / 2 - vo->dwidth / 2;
+        w32->window_y += w32->dh / 2 - vo->dheight / 2;
+    }
     w32->dw = vo->dwidth;
     w32->dh = vo->dheight;
 
@@ -1182,7 +1263,7 @@ static void *gui_thread(void *ptr)
     if (SUCCEEDED(OleInitialize(NULL))) {
         ole_ok = true;
 
-        fmtetc_url.cfFormat = (CLIPFORMAT)RegisterClipboardFormat(TEXT("UniformResourceLocator"));
+        fmtetc_url.cfFormat = (CLIPFORMAT)RegisterClipboardFormat(TEXT("UniformResourceLocatorW"));
         DropTarget* dropTarget = talloc(NULL, DropTarget);
         DropTarget_Init(dropTarget, w32);
         RegisterDragDrop(w32->window, &dropTarget->iface);
@@ -1196,6 +1277,20 @@ static void *gui_thread(void *ptr)
             if (FAILED(ITaskbarList2_HrInit(w32->taskbar_list))) {
                 ITaskbarList2_Release(w32->taskbar_list);
                 w32->taskbar_list = NULL;
+            }
+        }
+
+        // ITaskbarList3 has methods for status indication on taskbar buttons,
+        // however that interface is only available on Win7/2008 R2 or newer
+        if (SUCCEEDED(CoCreateInstance(&CLSID_TaskbarList, NULL,
+                                       CLSCTX_INPROC_SERVER, &IID_ITaskbarList3,
+                                       (void**)&w32->taskbar_list3)))
+        {
+            if (FAILED(ITaskbarList3_HrInit(w32->taskbar_list3))) {
+                ITaskbarList3_Release(w32->taskbar_list3);
+                w32->taskbar_list3 = NULL;
+            } else {
+                w32->tbtnCreatedMsg = RegisterWindowMessage(L"TaskbarButtonCreated");
             }
         }
     } else {
@@ -1235,6 +1330,8 @@ done:
     }
     if (w32->taskbar_list)
         ITaskbarList2_Release(w32->taskbar_list);
+    if (w32->taskbar_list3)
+        ITaskbarList3_Release(w32->taskbar_list3);
     if (ole_ok)
         OleUninitialize();
     SetThreadExecutionState(ES_CONTINUOUS);
@@ -1269,7 +1366,11 @@ int vo_w32_init(struct vo *vo)
     // While the UI runs in its own thread, the thread in which this function
     // runs in will be the renderer thread. Apply magic MMCSS cargo-cult,
     // which might stop Windows from throttling clock rate and so on.
-    w32->avrt_handle = AvSetMmThreadCharacteristicsW(L"Playback", &(DWORD){0});
+    if (vo->opts->mmcss_profile[0]) {
+        wchar_t *profile = mp_from_utf8(NULL, vo->opts->mmcss_profile);
+        w32->avrt_handle = AvSetMmThreadCharacteristicsW(profile, &(DWORD){0});
+        talloc_free(profile);
+    }
 
     return 1;
 fail:
@@ -1310,9 +1411,13 @@ static int gui_thread_control(struct vo_w32_state *w32, int request, void *arg)
         if (!w32->window_bounds_initialized)
             return VO_FALSE;
         if (w32->current_fs) {
+            w32->prev_x += w32->prev_width / 2 - s[0] / 2;
+            w32->prev_y += w32->prev_height / 2 - s[1] / 2;
             w32->prev_width = s[0];
             w32->prev_height = s[1];
         } else {
+            w32->window_x += w32->dw / 2 - s[0] / 2;
+            w32->window_y += w32->dh / 2 - s[1] / 2;
             w32->dw = s[0];
             w32->dh = s[1];
         }
@@ -1348,10 +1453,39 @@ static int gui_thread_control(struct vo_w32_state *w32, int request, void *arg)
         talloc_free(title);
         return VO_TRUE;
     }
+    case VOCTRL_UPDATE_PLAYBACK_STATE: {
+        struct voctrl_playback_state *pstate =
+            (struct voctrl_playback_state *)arg;
+
+        if (!w32->taskbar_list3 || !w32->tbtnCreated)
+            return VO_TRUE;
+
+        if (!pstate->playing || !pstate->taskbar_progress) {
+            ITaskbarList3_SetProgressState(w32->taskbar_list3, w32->window,
+                                           TBPF_NOPROGRESS);
+            return VO_TRUE;
+        }
+
+        ITaskbarList3_SetProgressValue(w32->taskbar_list3, w32->window,
+                                       pstate->percent_pos, 100);
+        ITaskbarList3_SetProgressState(w32->taskbar_list3, w32->window,
+                                       pstate->paused ? TBPF_PAUSED :
+                                                        TBPF_NORMAL);
+        return VO_TRUE;
+    }
     case VOCTRL_GET_DISPLAY_FPS:
-        update_display_fps(w32);
+        update_display_info(w32);
         *(double*) arg = w32->display_fps;
         return VO_TRUE;
+    case VOCTRL_GET_ICC_PROFILE:
+        update_display_info(w32);
+        if (w32->color_profile) {
+            bstr *p = arg;
+            *p = stream_read_file(w32->color_profile, NULL,
+                w32->vo->global, 100000000); // 100 MB
+            return p->len ? VO_TRUE : VO_FALSE;
+        }
+        return VO_FALSE;
     }
     return VO_NOTIMPL;
 }

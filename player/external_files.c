@@ -20,6 +20,7 @@ static const char *const sub_exts[] = {"utf", "utf8", "utf-8", "idx", "sub", "sr
 
 static const char *const audio_exts[] = {"mp3", "aac", "mka", "dts", "flac",
                                          "ogg", "m4a", "ac3", "opus", "wav",
+                                         "wv",
                                          NULL};
 
 static bool test_ext_list(bstr ext, const char *const *list)
@@ -87,7 +88,7 @@ static struct bstr guess_lang_from_filename(struct bstr name)
 static void append_dir_subtitles(struct mpv_global *global,
                                  struct subfn **slist, int *nsub,
                                  struct bstr path, const char *fname,
-                                 int limit_fuzziness)
+                                 int limit_fuzziness, int limit_type)
 {
     void *tmpmem = talloc_new(NULL);
     struct MPOpts *opts = global->opts;
@@ -136,7 +137,7 @@ static void append_dir_subtitles(struct mpv_global *global,
             break;
         }
 
-        if (fuzz < 0)
+        if (fuzz < 0 || (limit_type >= 0 && limit_type != type))
             goto next_sub;
 
         // we have a (likely) subtitle file
@@ -175,7 +176,7 @@ static void append_dir_subtitles(struct mpv_global *global,
             prio += prio;
             char *subpath = mp_path_join_bstr(*slist, path, dename);
             if (mp_path_exists(subpath)) {
-                MP_GROW_ARRAY(*slist, *nsub);
+                MP_TARRAY_GROW(NULL, *slist, *nsub);
                 struct subfn *sub = *slist + (*nsub)++;
 
                 // annoying and redundant
@@ -226,6 +227,25 @@ static void filter_subidx(struct subfn **slist, int *nsub)
     }
 }
 
+static void load_paths(struct mpv_global *global, struct subfn **slist,
+                       int *nsubs, const char *fname, char **paths,
+                       char *cfg_path, int type)
+{
+    for (int i = 0; paths && paths[i]; i++) {
+        char *path = mp_path_join_bstr(*slist, mp_dirname(fname),
+                                       bstr0(paths[i]));
+        append_dir_subtitles(global, slist, nsubs, bstr0(path), fname, 0, type);
+    }
+
+    // Load subtitles in ~/.mpv/sub (or similar) limiting sub fuzziness
+    char *mp_subdir = mp_find_config_file(NULL, global, cfg_path);
+    if (mp_subdir) {
+        append_dir_subtitles(global, slist, nsubs, bstr0(mp_subdir), fname, 1,
+                             type);
+    }
+    talloc_free(mp_subdir);
+}
+
 // Return a list of subtitles and audio files found, sorted by priority.
 // Last element is terminated with a fname==NULL entry.
 struct subfn *find_external_files(struct mpv_global *global, const char *fname)
@@ -235,23 +255,17 @@ struct subfn *find_external_files(struct mpv_global *global, const char *fname)
     int n = 0;
 
     // Load subtitles from current media directory
-    append_dir_subtitles(global, &slist, &n, mp_dirname(fname), fname, 0);
+    append_dir_subtitles(global, &slist, &n, mp_dirname(fname), fname, 0, -1);
 
+    // Load subtitles in dirs specified by sub-paths option
     if (opts->sub_auto >= 0) {
-        // Load subtitles in dirs specified by sub-paths option
-        if (opts->sub_paths) {
-            for (int i = 0; opts->sub_paths[i]; i++) {
-                char *path = mp_path_join_bstr(slist, mp_dirname(fname),
-                                               bstr0(opts->sub_paths[i]));
-                append_dir_subtitles(global, &slist, &n, bstr0(path), fname, 0);
-            }
-        }
+        load_paths(global, &slist, &n, fname, opts->sub_paths, "sub/",
+                   STREAM_SUB);
+    }
 
-        // Load subtitles in ~/.mpv/sub limiting sub fuzziness
-        char *mp_subdir = mp_find_config_file(NULL, global, "sub/");
-        if (mp_subdir)
-            append_dir_subtitles(global, &slist, &n, bstr0(mp_subdir), fname, 1);
-        talloc_free(mp_subdir);
+    if (opts->audiofile_auto >= 0) {
+        load_paths(global, &slist, &n, fname, opts->audiofile_paths, "audio/",
+                   STREAM_AUDIO);
     }
 
     // Sort by name for filter_subidx()

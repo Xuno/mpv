@@ -37,7 +37,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 
 #include "stream.h"
 #include "options/m_option.h"
@@ -383,6 +383,8 @@ static int open_cdda(stream_t *st)
     st->seekable = true;
     st->control = control;
     st->close = close_cdda;
+
+    st->streaming = true;
 
     st->type = STREAMTYPE_CDDA;
     st->demuxer = "+disc";

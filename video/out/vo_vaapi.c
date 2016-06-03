@@ -68,7 +68,6 @@ struct priv {
     struct vo               *vo;
     VADisplay                display;
     struct mp_vaapi_ctx     *mpvaapi;
-    struct mp_hwdec_info     hwdec_info;
 
     struct mp_image_params   image_params;
     struct mp_rect           src_rect;
@@ -515,11 +514,6 @@ static int control(struct vo *vo, uint32_t request, void *data)
     struct priv *p = vo->priv;
 
     switch (request) {
-    case VOCTRL_GET_HWDEC_INFO: {
-        struct mp_hwdec_info **arg = data;
-        *arg = &p->hwdec_info;
-        return true;
-    }
     case VOCTRL_SET_EQUALIZER: {
         struct voctrl_set_equalizer_args *eq = data;
         return set_equalizer(p, eq->name, eq->value);
@@ -561,6 +555,11 @@ static void uninit(struct vo *vo)
         free_subpicture(p, &part->image);
     }
 
+    if (vo->hwdec_devs) {
+        hwdec_devices_remove(vo->hwdec_devs, &p->mpvaapi->hwctx);
+        hwdec_devices_destroy(vo->hwdec_devs);
+    }
+
     va_destroy(p->mpvaapi);
 
     vo_x11_uninit(vo);
@@ -591,8 +590,6 @@ static int preinit(struct vo *vo)
         goto fail;
     }
 
-    p->hwdec_info.hwctx = &p->mpvaapi->hwctx;
-
     if (va_guess_if_emulated(p->mpvaapi)) {
         MP_WARN(vo, "VA-API is most likely emulated via VDPAU.\n"
                     "It's better to use VDPAU directly with: --vo=vdpau\n");
@@ -615,7 +612,7 @@ static int preinit(struct vo *vo)
 
     for (int i = 0; i < p->va_num_subpic_formats; i++) {
         MP_VERBOSE(vo, "  %s, flags 0x%x\n",
-                   VA_STR_FOURCC(p->va_subpic_formats[i].fourcc),
+                   mp_tag_str(p->va_subpic_formats[i].fourcc),
                    p->va_subpic_flags[i]);
         if (p->va_subpic_formats[i].fourcc == OSD_VA_FORMAT) {
             p->osd_format = p->va_subpic_formats[i];
@@ -645,6 +642,10 @@ static int preinit(struct vo *vo)
             p->va_num_display_attrs = 0;
         p->mp_display_attr = talloc_zero_array(vo, int, p->va_num_display_attrs);
     }
+
+    vo->hwdec_devs = hwdec_devices_create();
+    hwdec_devices_add(vo->hwdec_devs, &p->mpvaapi->hwctx);
+
     return 0;
 
 fail:

@@ -1,23 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * You can alternatively redistribute this file and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stddef.h>
@@ -33,6 +28,10 @@ extern const struct gl_hwdec_driver gl_hwdec_vaegl;
 extern const struct gl_hwdec_driver gl_hwdec_vaglx;
 extern const struct gl_hwdec_driver gl_hwdec_videotoolbox;
 extern const struct gl_hwdec_driver gl_hwdec_vdpau;
+extern const struct gl_hwdec_driver gl_hwdec_dxva2egl;
+extern const struct gl_hwdec_driver gl_hwdec_d3d11egl;
+extern const struct gl_hwdec_driver gl_hwdec_d3d11eglrgb;
+extern const struct gl_hwdec_driver gl_hwdec_dxva2gldx;
 extern const struct gl_hwdec_driver gl_hwdec_dxva2;
 
 static const struct gl_hwdec_driver *const mpgl_hwdec_drivers[] = {
@@ -48,25 +47,36 @@ static const struct gl_hwdec_driver *const mpgl_hwdec_drivers[] = {
 #if HAVE_VIDEOTOOLBOX_GL
     &gl_hwdec_videotoolbox,
 #endif
-#if HAVE_DXVA2_HWACCEL
+#if HAVE_D3D_HWACCEL
+#if HAVE_EGL_ANGLE
+    &gl_hwdec_d3d11egl,
+    &gl_hwdec_d3d11eglrgb,
+    &gl_hwdec_dxva2egl,
+#endif
+#if HAVE_GL_DXINTEROP
+    &gl_hwdec_dxva2gldx,
+#endif
     &gl_hwdec_dxva2,
 #endif
     NULL
 };
 
 static struct gl_hwdec *load_hwdec_driver(struct mp_log *log, GL *gl,
+                                          struct mpv_global *global,
+                                          struct mp_hwdec_devices *devs,
                                           const struct gl_hwdec_driver *drv,
                                           bool is_auto)
 {
     struct gl_hwdec *hwdec = talloc(NULL, struct gl_hwdec);
     *hwdec = (struct gl_hwdec) {
         .driver = drv,
-        .log = mp_log_new(hwdec, log, drv->api_name),
+        .log = mp_log_new(hwdec, log, drv->name),
+        .global = global,
         .gl = gl,
-        .gl_texture_target = GL_TEXTURE_2D,
+        .devs = devs,
         .probing = is_auto,
     };
-    mp_verbose(log, "Loading hwdec driver '%s'\n", drv->api_name);
+    mp_verbose(log, "Loading hwdec driver '%s'\n", drv->name);
     if (hwdec->driver->create(hwdec) < 0) {
         talloc_free(hwdec);
         mp_verbose(log, "Loading failed.\n");
@@ -76,24 +86,20 @@ static struct gl_hwdec *load_hwdec_driver(struct mp_log *log, GL *gl,
 }
 
 struct gl_hwdec *gl_hwdec_load_api(struct mp_log *log, GL *gl,
-                                   const char *api_name)
+                                   struct mpv_global *g,
+                                   struct mp_hwdec_devices *devs,
+                                   enum hwdec_type api)
 {
-    bool is_auto = api_name && strcmp(api_name, "auto") == 0;
+    bool is_auto = HWDEC_IS_AUTO(api);
     for (int n = 0; mpgl_hwdec_drivers[n]; n++) {
         const struct gl_hwdec_driver *drv = mpgl_hwdec_drivers[n];
-        if (is_auto || (api_name && strcmp(drv->api_name, api_name) == 0)) {
-            struct gl_hwdec *r = load_hwdec_driver(log, gl, drv, is_auto);
+        if (is_auto || api == drv->api) {
+            struct gl_hwdec *r = load_hwdec_driver(log, gl, g, devs, drv, is_auto);
             if (r)
                 return r;
         }
     }
     return NULL;
-}
-
-// Like gl_hwdec_load_api(), but use HWDEC_... identifiers.
-struct gl_hwdec *gl_hwdec_load_api_id(struct mp_log *log, GL *gl, int id)
-{
-    return gl_hwdec_load_api(log, gl, m_opt_choice_str(mp_hwdec_names, id));
 }
 
 void gl_hwdec_uninit(struct gl_hwdec *hwdec)

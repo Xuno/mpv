@@ -3,18 +3,18 @@
  *
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -23,7 +23,7 @@
 #include <inttypes.h>
 #include <math.h>
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 
 #include "demux.h"
 #include "timeline.h"
@@ -213,25 +213,25 @@ static void build_timeline(struct timeline *tl, struct tl_parts *parts)
 
         resolve_timestamps(part, source);
 
-        double len = source_get_length(source);
-        if (len > 0) {
-            len += source->start_time;
-        } else {
-            MP_WARN(tl, "EDL: source file '%s' has unknown duration.\n",
-                    part->filename);
-        }
+        double end_time = source_get_length(source);
+        if (end_time >= 0)
+            end_time += source->start_time;
 
         // Unknown length => use rest of the file. If duration is unknown, make
         // something up.
-        if (part->length < 0)
-            part->length = (len < 0 ? 1 : len) - part->offset;
-
-        if (len > 0) {
-            double partlen = part->offset + part->length;
-            if (partlen > len) {
+        if (part->length < 0) {
+            if (end_time < 0) {
+                MP_WARN(tl, "EDL: source file '%s' has unknown duration.\n",
+                        part->filename);
+                end_time = 1;
+            }
+            part->length = end_time - part->offset;
+        } else if (end_time >= 0) {
+            double end_part = part->offset + part->length;
+            if (end_part > end_time) {
                 MP_WARN(tl, "EDL: entry %d uses %f "
                         "seconds, but file has only %f seconds.\n",
-                        n, partlen, len);
+                        n, end_part, end_time);
             }
         }
 

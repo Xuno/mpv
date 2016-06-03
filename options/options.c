@@ -60,7 +60,6 @@ static void print_help(struct mp_log *log)
 }
 
 extern const struct m_sub_options tv_params_conf;
-extern const struct m_sub_options stream_pvr_conf;
 extern const struct m_sub_options stream_cdda_conf;
 extern const struct m_sub_options stream_dvb_conf;
 extern const struct m_sub_options stream_lavf_conf;
@@ -83,12 +82,17 @@ extern const struct m_obj_list ao_obj_list;
 const struct m_opt_choice_alternatives mp_hwdec_names[] = {
     {"no",          HWDEC_NONE},
     {"auto",        HWDEC_AUTO},
+    {"auto-copy",   HWDEC_AUTO_COPY},
     {"vdpau",       HWDEC_VDPAU},
     {"videotoolbox",HWDEC_VIDEOTOOLBOX},
     {"vaapi",       HWDEC_VAAPI},
     {"vaapi-copy",  HWDEC_VAAPI_COPY},
+    {"dxva2",       HWDEC_DXVA2},
     {"dxva2-copy",  HWDEC_DXVA2_COPY},
+    {"d3d11va",     HWDEC_D3D11VA},
+    {"d3d11va-copy",HWDEC_D3D11VA_COPY},
     {"rpi",         HWDEC_RPI},
+    {"mediacodec",  HWDEC_MEDIACODEC},
     {0}
 };
 
@@ -198,6 +202,8 @@ const m_option_t mp_opts[] = {
     OPT_REL_TIME("end", play_end, 0),
     OPT_REL_TIME("length", play_length, 0),
 
+    OPT_FLAG("rebase-start-time", rebase_start_time, 0),
+
     OPT_TIME("ab-loop-a", ab_loop[0], 0, .min = MP_NOPTS_VALUE),
     OPT_TIME("ab-loop-b", ab_loop[1], 0, .min = MP_NOPTS_VALUE),
 
@@ -224,6 +230,8 @@ const m_option_t mp_opts[] = {
     OPT_FLAG_STORE("no-audio", stream_id[0][STREAM_AUDIO], 0, -2),
     OPT_STRINGLIST("alang", stream_lang[STREAM_AUDIO], 0),
     OPT_STRINGLIST("slang", stream_lang[STREAM_SUB], 0),
+
+    OPT_STRING("lavfi-complex", lavfi_complex, 0),
 
     OPT_CHOICE("audio-display", audio_display, 0,
                ({"no", 0}, {"attachment", 1})),
@@ -258,9 +266,6 @@ const m_option_t mp_opts[] = {
 #if HAVE_TV
     OPT_SUBSTRUCT("tv", tv_params, tv_params_conf, 0),
 #endif /* HAVE_TV */
-#if HAVE_PVR
-    OPT_SUBSTRUCT("pvr", stream_pvr_opts, stream_pvr_conf, 0),
-#endif /* HAVE_PVR */
 #if HAVE_DVBIN
     OPT_SUBSTRUCT("dvbin", stream_dvb_opts, stream_dvb_conf, 0),
 #endif
@@ -273,9 +278,10 @@ const m_option_t mp_opts[] = {
 
     // force video/audio rate:
     OPT_DOUBLE("fps", force_fps, CONF_MIN, .min = 0),
-    OPT_INTRANGE("audio-samplerate", force_srate, 0, 1000, 8*48000),
+    OPT_INTRANGE("audio-samplerate", force_srate, 0, 1000, 16*48000),
     OPT_CHMAP("audio-channels", audio_output_channels, CONF_MIN, .min = 0),
     OPT_AUDIOFORMAT("audio-format", audio_output_format, 0),
+    OPT_FLAG("audio-normalize-downmix", audio_normalize, 0),
     OPT_DOUBLE("speed", playback_speed, M_OPT_RANGE | M_OPT_FIXED,
                .min = 0.01, .max = 100.0),
 
@@ -306,6 +312,9 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE_C("hwdec", hwdec_api, 0, mp_hwdec_names),
     OPT_CHOICE_C("hwdec-preload", vo.hwdec_preload_api, 0, mp_hwdec_names),
     OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
+#if HAVE_VIDEOTOOLBOX_HWACCEL
+    OPT_IMAGEFORMAT("videotoolbox-format", videotoolbox_format, 0),
+#endif
 
     OPT_SUBSTRUCT("sws", vo.sws_opts, sws_conf, 0),
 
@@ -331,6 +340,8 @@ const m_option_t mp_opts[] = {
 
     OPT_STRING_APPEND_LIST("sub-file", sub_name, M_OPT_FILE),
     OPT_PATHLIST("sub-paths", sub_paths, 0),
+    OPT_PATHLIST("audio-file-paths", audiofile_paths, 0),
+    OPT_STRING_APPEND_LIST("external-file", external_files, M_OPT_FILE),
     OPT_STRING("sub-codepage", sub_cp, 0),
     OPT_FLOAT("sub-delay", sub_delay, 0),
     OPT_FLOAT("sub-fps", sub_fps, 0),
@@ -364,7 +375,7 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE("ass-shaper", ass_shaper, 0,
                ({"simple", 0}, {"complex", 1})),
     OPT_CHOICE("ass-style-override", ass_style_override, 0,
-               ({"no", 0}, {"yes", 1}, {"force", 3}, {"signfs", 4})),
+               ({"no", 0}, {"yes", 1}, {"force", 3}, {"signfs", 4}, {"strip", 5})),
     OPT_FLAG("sub-scale-by-window", sub_scale_by_window, 0),
     OPT_FLAG("sub-scale-with-window", sub_scale_with_window, 0),
     OPT_FLAG("ass-scale-with-window", ass_scale_with_window, 0),
@@ -387,8 +398,10 @@ const m_option_t mp_opts[] = {
     OPT_FLAG("audio-fallback-to-null", ao_null_fallback, 0),
     OPT_CHOICE("force-window", force_vo, 0,
                ({"no", 0}, {"yes", 1}, {"immediate", 2})),
+    OPT_FLAG("taskbar-progress", vo.taskbar_progress, 0),
     OPT_FLAG("ontop", vo.ontop, M_OPT_FIXED),
     OPT_FLAG("border", vo.border, M_OPT_FIXED),
+    OPT_FLAG("fit-border", vo.fit_border, M_OPT_FIXED),
     OPT_FLAG("on-all-workspaces", vo.all_workspaces, M_OPT_FIXED),
 
     OPT_FLAG("window-dragging", allow_win_drag, CONF_GLOBAL),
@@ -436,7 +449,7 @@ const m_option_t mp_opts[] = {
     OPT_FLOATRANGE("video-align-y", vo.align_y, 0, -1.0, 1.0),
     OPT_FLAG("video-unscaled", vo.unscaled, 0),
     OPT_FLAG("force-rgba-osd-rendering", force_rgba_osd, 0),
-    OPT_CHOICE_OR_INT("video-rotate", video_rotate, 0, 0, 360,
+    OPT_CHOICE_OR_INT("video-rotate", video_rotate, 0, 0, 359,
                       ({"no", -1})),
     OPT_CHOICE_C("video-stereo-mode", video_stereo_mode, 0, mp_stereo3d_names),
 
@@ -449,7 +462,13 @@ const m_option_t mp_opts[] = {
 #if HAVE_X11
     OPT_CHOICE("x11-netwm", vo.x11_netwm, 0,
                ({"auto", 0}, {"no", -1}, {"yes", 1})),
+    OPT_CHOICE("x11-bypass-compositor", vo.x11_bypass_compositor, 0,
+               ({"no", 0}, {"yes", 1}, {"fs-only", 2}, {"never", 3})),
 #endif
+#if HAVE_WIN32
+    OPT_STRING("vo-mmcss-profile", vo.mmcss_profile, M_OPT_FIXED),
+#endif
+
     OPT_STRING("heartbeat-cmd", heartbeat_cmd, 0),
     OPT_FLOAT("heartbeat-interval", heartbeat_interval, CONF_MIN, 0),
 
@@ -569,7 +588,7 @@ const m_option_t mp_opts[] = {
     OPT_FLAG("input-terminal", consolecontrols, CONF_GLOBAL),
 
     OPT_STRING("input-file", input_file, M_OPT_FILE | M_OPT_GLOBAL),
-    OPT_STRING("input-unix-socket", ipc_path, M_OPT_FILE),
+    OPT_STRING("input-ipc-server", ipc_path, M_OPT_FILE),
 
     OPT_SUBSTRUCT("screenshot", screenshot_image_opts, image_writer_conf, 0),
     OPT_STRING("screenshot-template", screenshot_template, 0),
@@ -664,6 +683,7 @@ const m_option_t mp_opts[] = {
     OPT_REPLACED("dtshd", "ad-spdif-dtshd"),
     OPT_REPLACED("ass-use-margins", "sub-use-margins"),
     OPT_REPLACED("media-title", "force-media-title"),
+    OPT_REPLACED("input-unix-socket", "input-ipc-server"),
 
     {0}
 };
@@ -672,7 +692,7 @@ const struct MPOpts mp_default_opts = {
     .use_terminal = 1,
     .msg_color = 1,
     .audio_driver_list = NULL,
-    .audio_decoders = "lavc:libdcadec,-spdif:*", // never select spdif by default
+    .audio_decoders = "-spdif:*", // never select spdif by default
     .video_decoders = NULL,
     .deinterlace = -1,
     .softvol = SOFTVOL_AUTO,
@@ -691,9 +711,13 @@ const struct MPOpts mp_default_opts = {
         .panscan = 0.0f,
         .keepaspect = 1,
         .keepaspect_window = 1,
+        .taskbar_progress = 1,
         .border = 1,
+        .fit_border = 1,
         .WinID = -1,
         .window_scale = 1.0,
+        .x11_bypass_compositor = 2,
+        .mmcss_profile = "Playback",
     },
     .allow_win_drag = 1,
     .wintitle = "${?media-title:${media-title}}${!media-title:No file} - mpv",
@@ -763,6 +787,7 @@ const struct MPOpts mp_default_opts = {
     .consolecontrols = 1,
     .playlist_pos = -1,
     .play_frames = -1,
+    .rebase_start_time = 1,
     .keep_open = 0,
     .stream_id = { { [STREAM_AUDIO] = -1,
                      [STREAM_VIDEO] = -1,
@@ -777,7 +802,7 @@ const struct MPOpts mp_default_opts = {
     .sub_visibility = 1,
     .sub_pos = 100,
     .sub_speed = 1.0,
-    .audio_output_channels = {0}, // auto
+    .audio_output_channels = MP_CHMAP_INIT_STEREO,
     .audio_output_format = 0,  // AF_FORMAT_UNKNOWN
     .playback_speed = 1.,
     .pitch_correction = 1,
@@ -801,6 +826,7 @@ const struct MPOpts mp_default_opts = {
     .screenshot_template = "mpv-shot%n",
 
     .hwdec_codecs = "h264,vc1,wmv3,hevc,mpeg2video",
+    .videotoolbox_format = IMGFMT_NV12,
 
     .index_mode = 1,
 
@@ -808,13 +834,9 @@ const struct MPOpts mp_default_opts = {
 
     .mf_fps = 1.0,
 
-#if HAVE_RPI
-    .hwdec_api = -1,
-#endif
-
     .display_tags = (char **)(const char*[]){
         "Artist", "Album", "Album_Artist", "Comment", "Composer", "Genre",
-        "Performer", "Title", "Track", "icy-title",
+        "Performer", "Title", "Track", "icy-title", "service_name",
         NULL
     },
 };

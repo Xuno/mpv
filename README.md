@@ -26,6 +26,21 @@ variety of video file formats, audio and video codecs, and subtitle types.
 
 Releases can be found on the [release list][releases].
 
+## System requirements
+
+- A not too ancient Linux, or Windows Vista or later, or OSX 10.8 or later.
+- A somewhat capable CPU. Hardware decoding might sometimes help if the CPU
+  is too slow to decode video realtime, but must be explicitly enabled with
+  the `--hwdec` option. On Windows, a CPU with SSE4 instruction set is required
+  to get decent hardware decoding performance.
+- A not too crappy GPU. mpv is not intended to be used with bad GPUs. There are
+  many caveats with drivers or system compositors causing tearing, stutter,
+  etc. On Windows, you might want to make sure the graphics drivers are
+  current, especially OpenGL. In some cases, ancient fallback video output
+  methods can help (such as `--vo=xv` on Linux), but this use is not
+  recommended or supported.
+
+
 ## Downloads
 
 
@@ -70,7 +85,7 @@ Essential dependencies (incomplete list):
 - libass (OSD, OSC, text subtitles)
 - Lua (optional, required for the OSC pseudo-GUI and youtube-dl integration)
 - libjpeg (optional, used for screenshots only)
-- Enca (optional, for subtitle charset detection)
+- uchardet (optional, for subtitle charset detection)
 - vdpau and vaapi libraries for hardware decoding on Linux (optional)
 
 Libass dependencies:
@@ -96,12 +111,9 @@ the separately available build wrapper ([mpv-build][mpv-build]) that first compi
 libraries and libass, and then compiles the player statically linked against
 those.
 
-If you are running Mac OSX and using homebrew we provide [homebrew-mpv][homebrew-mpv], an up
-to date formula that compiles mpv with sensible dependencies and defaults for
-OSX.
-
 If you want to build a Windows binary, you either have to use MSYS2 and MinGW,
 or cross-compile from Linux with MinGW. See [Windows compilation][windows_compilation].
+
 
 ## FFmpeg vs. Libav
 
@@ -111,20 +123,28 @@ of both FFmpeg and Libav. But FFmpeg is preferred, and some mpv features work
 with FFmpeg only (subtitle formats in particular).
 
 
+## Preferred FFmpeg version
+
+
+Using the latest FFmpeg release (or FFmpeg git master) is strongly recommended.
+Older versions are unsupported, even if the build system still happens to
+accept them. The main reason mpv still builds with older FFmpeg versions is to
+evade arguing with people (users, distros) who insist on using older FFmpeg
+versions for no rational reason.
+
+If you want to use a stable FFmpeg release, use the latest release, which has
+most likely the best maintenance out of all stable releases. Older releases
+are for distros, and at best receive basic changes like fixing critical security
+issues or build fixes, and at worst are completely abandoned.
+
 ## Release cycle
 
+Every other month, an arbitrary git snapshot is made, and is assigned
+a 0.X.0 version number. No further maintenance is done.
 
-Every few months, a new release is cut off of the master branch and is assigned
-a 0.X.0 version number.
-
-As part of the maintenance process, minor releases are made, which are assigned
-0.X.Y version numbers. Minor releases contain bug fixes only. They never merge
-the master branch, and no features are added to it. Only the latest release is
-maintained.
-
-The goal of releases is to provide stability and an unchanged base for the sake
-of Linux distributions. If you want the newest features, just use the master
-branch, which is stable most of the time, except sometimes, when it's not.
+The goal of releases is to make Linux distributions happy. Linux distributions
+are also expected to apply their own patches in case of bugs and security
+issues.
 
 Releases other than the latest release are unsupported and unmaintained.
 

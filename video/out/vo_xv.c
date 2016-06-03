@@ -42,7 +42,7 @@
 #include <X11/extensions/Xvlib.h>
 
 #include "options/options.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/msg.h"
 #include "vo.h"
 #include "video/mp_image.h"
@@ -577,6 +577,15 @@ static bool allocate_xvimage(struct vo *vo, int foo)
             return false;
         XSync(x11->display, False);
     }
+
+    if ((ctx->xvimage[foo]->width != aligned_w) ||
+        (ctx->xvimage[foo]->height != ctx->image_height)) {
+        MP_ERR(vo, "Got XvImage with incorrect size: %ux%u (expected %ux%u)\n",
+               ctx->xvimage[foo]->width, ctx->xvimage[foo]->height,
+               aligned_w, ctx->image_height);
+        return false;
+    }
+
     struct mp_image img = get_xv_buffer(vo, foo);
     img.w = aligned_w;
     mp_image_clear(&img, 0, 0, img.w, img.h);
@@ -843,6 +852,9 @@ static int preinit(struct vo *vo)
     ctx->fo = XvListImageFormats(x11->display, ctx->xv_port,
                                  (int *) &ctx->formats);
 
+    MP_WARN(vo, "Warning: this legacy VO has bad quality and performance, "
+                "and will in particular result in blurry OSD and subtitles. "
+                "You should fix your graphic drivers, or not force the xv VO.\n");
     return 0;
 
   error:
