@@ -119,20 +119,14 @@ enum mp_imgfmt {
     // most significant bits with 0 (use shifts to expand them to 16 bits).
 
     IMGFMT_444P16,
-    IMGFMT_444P14,
-    IMGFMT_444P12,
     IMGFMT_444P10,
     IMGFMT_444P9,
 
     IMGFMT_422P16,
-    IMGFMT_422P14,
-    IMGFMT_422P12,
     IMGFMT_422P10,
     IMGFMT_422P9,
 
     IMGFMT_420P16,
-    IMGFMT_420P14,
-    IMGFMT_420P12,
     IMGFMT_420P10,
     IMGFMT_420P9,
 
@@ -157,8 +151,10 @@ enum mp_imgfmt {
     IMGFMT_NV12,
     IMGFMT_NV21,
 
-    // Like IMGFMT_NV12, but with 16 bits per component
+    // Like IMGFMT_NV12, but with 10 bits per component (and 6 bits of padding)
     IMGFMT_P010,
+    // Like IMGFMT_NV12, but with 16 bits per component
+    IMGFMT_P016,
 
     // RGB/BGR Formats
 
@@ -213,6 +209,7 @@ enum mp_imgfmt {
     IMGFMT_MMAL,            // MMAL_BUFFER_HEADER_T
     IMGFMT_VIDEOTOOLBOX,    // CVPixelBufferRef
 
+    IMGFMT_CUDA,            // CUDA Buffer
     // Generic pass-through of AV_PIX_FMT_*. Used for formats which don't have
     // a corresponding IMGFMT_ value.
     IMGFMT_AVPIXFMT_START,

@@ -43,11 +43,12 @@
 #include "audio/filter/af.h"
 
 extern const struct ad_functions ad_lavc;
+
+// Not a real codec - specially treated.
 extern const struct ad_functions ad_spdif;
 
 static const struct ad_functions * const ad_drivers[] = {
     &ad_lavc,
-    &ad_spdif,
     NULL
 };
 
@@ -90,10 +91,10 @@ static struct mp_decoder_list *audio_select_decoders(struct dec_audio *d_audio)
 
     struct mp_decoder_list *list = audio_decoder_list();
     struct mp_decoder_list *new =
-        mp_select_decoders(list, codec, opts->audio_decoders);
-    if (d_audio->try_spdif) {
+        mp_select_decoders(d_audio->log, list, codec, opts->audio_decoders);
+    if (d_audio->try_spdif && codec) {
         struct mp_decoder_list *spdif =
-            mp_select_decoder_list(list, codec, "spdif", opts->audio_spdif);
+            select_spdif_codec(codec, opts->audio_spdif);
         mp_append_decoders(spdif, new);
         talloc_free(new);
         new = spdif;
@@ -108,6 +109,8 @@ static const struct ad_functions *find_driver(const char *name)
         if (strcmp(ad_drivers[i]->name, name) == 0)
             return ad_drivers[i];
     }
+    if (strcmp(name, "spdif") == 0)
+        return &ad_spdif;
     return NULL;
 }
 
@@ -126,21 +129,18 @@ int audio_init_best_codec(struct dec_audio *d_audio)
         const struct ad_functions *driver = find_driver(sel->family);
         if (!driver)
             continue;
-        MP_VERBOSE(d_audio, "Opening audio decoder %s:%s\n",
-                   sel->family, sel->decoder);
+        MP_VERBOSE(d_audio, "Opening audio decoder %s\n", sel->decoder);
         d_audio->ad_driver = driver;
         if (init_audio_codec(d_audio, sel->decoder)) {
             decoder = sel;
             break;
         }
-        MP_WARN(d_audio, "Audio decoder init failed for "
-                "%s:%s\n", sel->family, sel->decoder);
+        MP_WARN(d_audio, "Audio decoder init failed for %s\n", sel->decoder);
     }
 
     if (d_audio->ad_driver) {
         d_audio->decoder_desc =
-            talloc_asprintf(d_audio, "%s [%s:%s]", decoder->desc, decoder->family,
-                            decoder->decoder);
+            talloc_asprintf(d_audio, "%s (%s)", decoder->decoder, decoder->desc);
         MP_VERBOSE(d_audio, "Selected audio codec: %s\n", d_audio->decoder_desc);
     } else {
         MP_ERR(d_audio, "Failed to initialize an audio decoder for codec '%s'.\n",
@@ -180,10 +180,14 @@ static void fix_audio_pts(struct dec_audio *da)
 
     if (da->current_frame->pts != MP_NOPTS_VALUE) {
         double newpts = da->current_frame->pts;
+
+        if (da->pts != MP_NOPTS_VALUE)
+            MP_STATS(da, "value %f audio-pts-err", da->pts - newpts);
+
         // Keep the interpolated timestamp if it doesn't deviate more
         // than 1 ms from the real one. (MKV rounded timestamps.)
         if (da->pts == MP_NOPTS_VALUE || fabs(da->pts - newpts) > 0.001)
-            da->pts = da->current_frame->pts;
+            da->pts = newpts;
     }
 
     if (da->pts == MP_NOPTS_VALUE && da->header->missing_timestamps)
@@ -197,10 +201,12 @@ static void fix_audio_pts(struct dec_audio *da)
 
 void audio_work(struct dec_audio *da)
 {
-    if (da->current_frame)
+    if (da->current_frame || !da->ad_driver)
         return;
 
-    if (!da->packet && demux_read_packet_async(da->header, &da->packet) == 0) {
+    if (!da->packet && !da->new_segment &&
+        demux_read_packet_async(da->header, &da->packet) == 0)
+    {
         da->current_state = DATA_WAIT;
         return;
     }
@@ -211,34 +217,30 @@ void audio_work(struct dec_audio *da)
         da->packet = NULL;
     }
 
-    bool had_packet = da->packet || da->new_segment;
-
-    int ret = da->ad_driver->decode_packet(da, da->packet, &da->current_frame);
-    if (ret < 0 || (da->packet && da->packet->len == 0)) {
+    if (da->ad_driver->send_packet(da, da->packet)) {
         talloc_free(da->packet);
         da->packet = NULL;
     }
+
+    bool progress = da->ad_driver->receive_frame(da, &da->current_frame);
 
     if (da->current_frame && !mp_audio_config_valid(da->current_frame)) {
         talloc_free(da->current_frame);
         da->current_frame = NULL;
     }
 
-    da->current_state = DATA_OK;
-    if (!da->current_frame) {
+    da->current_state = da->current_frame ? DATA_OK : DATA_AGAIN;
+    if (!progress)
         da->current_state = DATA_EOF;
-        if (had_packet)
-            da->current_state = DATA_AGAIN;
-    }
 
     fix_audio_pts(da);
 
-    bool segment_end = true;
+    bool segment_end = da->current_state == DATA_EOF;
 
     if (da->current_frame) {
         mp_audio_clip_timestamps(da->current_frame, da->start, da->end);
         if (da->current_frame->pts != MP_NOPTS_VALUE && da->start != MP_NOPTS_VALUE)
-            segment_end = da->current_frame->pts >= da->start;
+            segment_end = da->current_frame->pts >= da->end;
         if (da->current_frame->samples == 0) {
             talloc_free(da->current_frame);
             da->current_frame = NULL;
@@ -250,12 +252,15 @@ void audio_work(struct dec_audio *da)
         struct demux_packet *new_segment = da->new_segment;
         da->new_segment = NULL;
 
-        // Could avoid decoder reinit; would still need flush.
-        da->codec = new_segment->codec;
-        if (da->ad_driver)
-            da->ad_driver->uninit(da);
-        da->ad_driver = NULL;
-        audio_init_best_codec(da);
+        if (da->codec == new_segment->codec) {
+            audio_reset_decoding(da);
+        } else {
+            da->codec = new_segment->codec;
+            if (da->ad_driver)
+                da->ad_driver->uninit(da);
+            da->ad_driver = NULL;
+            audio_init_best_codec(da);
+        }
 
         da->start = new_segment->start;
         da->end = new_segment->end;

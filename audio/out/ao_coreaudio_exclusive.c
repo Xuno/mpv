@@ -41,7 +41,7 @@
 #include "internal.h"
 #include "audio/format.h"
 #include "osdep/timer.h"
-#include "osdep/atomics.h"
+#include "osdep/atomic.h"
 #include "options/m_option.h"
 #include "common/msg.h"
 #include "audio/out/ao_coreaudio_chmap.h"
@@ -399,7 +399,7 @@ const struct ao_driver audio_out_coreaudio_exclusive = {
     .name      = "coreaudio_exclusive",
     .uninit    = uninit,
     .init      = init,
-    .pause     = audio_pause,
+    .reset     = audio_pause,
     .resume    = audio_resume,
     .list_devs = ca_get_device_list,
     .priv_size = sizeof(struct priv),

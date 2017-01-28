@@ -39,15 +39,10 @@
 // usually copy the whole struct, so that fields added later will be preserved.
 struct mp_image_params {
     enum mp_imgfmt imgfmt;      // pixel format
-    uint64_t hw_subfmt;         // underlying format for some hwaccel pixfmts
-                                // (will use the HW API's format identifiers)
+    enum mp_imgfmt hw_subfmt;   // underlying format for some hwaccel pixfmts
     int w, h;                   // image dimensions
     int p_w, p_h;               // define pixel aspect ratio (undefined: 0/0)
-    enum mp_csp colorspace;
-    enum mp_csp_levels colorlevels;
-    enum mp_csp_prim primaries;
-    enum mp_csp_trc gamma;
-    float peak; // 0 = auto/unknown
+    struct mp_colorspace color;
     enum mp_chroma_location chroma_location;
     // The image should be rotated clockwise (0-359 degrees).
     int rotate;
@@ -90,7 +85,7 @@ typedef struct mp_image {
     /* only inside filter chain */
     double pts;
     /* only after decoder */
-    double dts;
+    double dts, pkt_duration;
     /* for private use */
     void* priv;
 
@@ -138,7 +133,7 @@ void mp_image_params_guess_csp(struct mp_image_params *params);
 
 char *mp_image_params_to_str_buf(char *b, size_t bs,
                                  const struct mp_image_params *p);
-#define mp_image_params_to_str(p) mp_image_params_to_str_buf((char[80]){0}, 80, p)
+#define mp_image_params_to_str(p) mp_image_params_to_str_buf((char[99]){0}, 99, p)
 
 bool mp_image_params_valid(const struct mp_image_params *p);
 bool mp_image_params_equal(const struct mp_image_params *p1,

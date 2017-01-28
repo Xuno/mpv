@@ -160,17 +160,13 @@ static GLXFBConfig select_fb_config(struct vo *vo, const int *attribs, int flags
     if (flags & VOFLAG_ALPHA) {
         for (int n = 0; n < fbcount; n++) {
             XVisualInfo *v = glXGetVisualFromFBConfig(vo->x11->display, fbc[n]);
-            if (!v)
-                continue;
-            // This is a heuristic at best. Note that normal 8 bit Visuals use
-            // a depth of 24, even if the pixels are padded to 32 bit. If the
-            // depth is higher than 24, the remaining bits must be alpha.
-            // Note: vinfo->bits_per_rgb appears to be useless (is always 8).
-            unsigned long mask = v->depth == sizeof(unsigned long) * 8 ?
-                (unsigned long)-1 : (1UL << v->depth) - 1;
-            if (mask & ~(v->red_mask | v->green_mask | v->blue_mask)) {
-                fbconfig = fbc[n];
-                break;
+            if (v) {
+                bool is_rgba = vo_x11_is_rgba_visual(v);
+                XFree(v);
+                if (is_rgba) {
+                    fbconfig = fbc[n];
+                    break;
+                }
             }
         }
     }
@@ -235,7 +231,10 @@ static int glx_init(struct MPGLContext *ctx, int flags)
         MP_ERR(vo, "no GLX support present\n");
         goto uninit;
     }
-    MP_VERBOSE(vo, "GLX chose FB config with ID 0x%x\n", (int)(intptr_t)fbc);
+
+    int fbid = -1;
+    if (!glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_FBCONFIG_ID, &fbid))
+        MP_VERBOSE(vo, "GLX chose FB config with ID 0x%x\n", fbid);
 
     glx_ctx->fbc = fbc;
     glx_ctx->vinfo = glXGetVisualFromFBConfig(vo->x11->display, fbc);
@@ -270,10 +269,6 @@ static int glx_init(struct MPGLContext *ctx, int flags)
         ctx->gl->mpgl_caps |= MPGL_CAP_SW;
     if (!success)
         goto uninit;
-
-    glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_RED_SIZE, &ctx->gl->fb_r);
-    glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_GREEN_SIZE, &ctx->gl->fb_g);
-    glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_BLUE_SIZE, &ctx->gl->fb_b);
 
     return 0;
 
@@ -312,6 +307,16 @@ static void glx_swap_buffers(struct MPGLContext *ctx)
     glXSwapBuffers(ctx->vo->x11->display, ctx->vo->x11->window);
 }
 
+static void glx_wakeup(struct MPGLContext *ctx)
+{
+    vo_x11_wakeup(ctx->vo);
+}
+
+static void glx_wait_events(struct MPGLContext *ctx, int64_t until_time_us)
+{
+    vo_x11_wait_events(ctx->vo, until_time_us);
+}
+
 const struct mpgl_driver mpgl_driver_x11 = {
     .name           = "x11",
     .priv_size      = sizeof(struct glx_context),
@@ -319,6 +324,8 @@ const struct mpgl_driver mpgl_driver_x11 = {
     .reconfig       = glx_reconfig,
     .swap_buffers   = glx_swap_buffers,
     .control        = glx_control,
+    .wakeup         = glx_wakeup,
+    .wait_events    = glx_wait_events,
     .uninit         = glx_uninit,
 };
 
@@ -329,5 +336,7 @@ const struct mpgl_driver mpgl_driver_x11_probe = {
     .reconfig       = glx_reconfig,
     .swap_buffers   = glx_swap_buffers,
     .control        = glx_control,
+    .wakeup         = glx_wakeup,
+    .wait_events    = glx_wait_events,
     .uninit         = glx_uninit,
 };

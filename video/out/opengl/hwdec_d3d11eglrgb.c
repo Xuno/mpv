@@ -15,7 +15,6 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <initguid.h>
 #include <assert.h>
 #include <windows.h>
 #include <d3d11.h>
@@ -30,6 +29,7 @@
 #include "osdep/windows_utils.h"
 #include "hwdec.h"
 #include "video/hwdec.h"
+#include "video/decode/d3d.h"
 
 #ifndef EGL_D3D_TEXTURE_SUBRESOURCE_ID_ANGLE
 #define EGL_D3D_TEXTURE_SUBRESOURCE_ID_ANGLE 0x3AAB
@@ -39,18 +39,10 @@ struct priv {
     struct mp_hwdec_ctx hwctx;
 
     ID3D11Device *d3d11_device;
-    ID3D11DeviceContext *device_ctx;
-    ID3D11VideoDevice *video_dev;
-    ID3D11VideoContext *video_ctx;
 
     EGLDisplay egl_display;
     EGLConfig  egl_config;
     EGLSurface egl_surface;
-
-    ID3D11Texture2D *texture;
-    ID3D11VideoProcessor *video_proc;
-    ID3D11VideoProcessorEnumerator *vp_enum;
-    ID3D11VideoProcessorOutputView *out_view;
 
     GLuint gl_texture;
 };
@@ -84,18 +76,6 @@ static void destroy(struct gl_hwdec *hw)
 
     hwdec_devices_remove(hw->devs, &p->hwctx);
 
-    if (p->video_ctx)
-        ID3D11VideoContext_Release(p->video_ctx);
-    p->video_ctx = NULL;
-
-    if (p->video_dev)
-        ID3D11VideoDevice_Release(p->video_dev);
-    p->video_dev = NULL;
-
-    if (p->device_ctx)
-        ID3D11DeviceContext_Release(p->device_ctx);
-    p->device_ctx = NULL;
-
     if (p->d3d11_device)
         ID3D11Device_Release(p->d3d11_device);
     p->d3d11_device = NULL;
@@ -105,6 +85,8 @@ static int create(struct gl_hwdec *hw)
 {
     if (!angle_load())
         return -1;
+
+    d3d_load_dlls();
 
     EGLDisplay egl_display = eglGetCurrentDisplay();
     if (!egl_display)
@@ -123,9 +105,9 @@ static int create(struct gl_hwdec *hw)
 
     p->egl_display = egl_display;
 
-    HANDLE d3d11_dll = GetModuleHandleW(L"d3d11.dll");
     if (!d3d11_dll) {
-        MP_ERR(hw, "Failed to load D3D11 library\n");
+        if (!hw->probing)
+            MP_ERR(hw, "Failed to load D3D11 library\n");
         goto fail;
     }
 
@@ -138,8 +120,9 @@ static int create(struct gl_hwdec *hw)
                       D3D11_CREATE_DEVICE_VIDEO_SUPPORT, NULL, 0,
                       D3D11_SDK_VERSION, &p->d3d11_device, NULL, NULL);
     if (FAILED(hr)) {
-        MP_ERR(hw, "Failed to create D3D11 Device: %s\n",
-            mp_HRESULT_to_str(hr));
+        int lev = hw->probing ? MSGL_V : MSGL_ERR;
+        mp_msg(hw->log, lev, "Failed to create D3D11 Device: %s\n",
+               mp_HRESULT_to_str(hr));
         goto fail;
     }
 
@@ -155,18 +138,10 @@ static int create(struct gl_hwdec *hw)
     ID3D10Multithread_SetMultithreadProtected(multithread, TRUE);
     ID3D10Multithread_Release(multithread);
 
-    hr = ID3D11Device_QueryInterface(p->d3d11_device, &IID_ID3D11VideoDevice,
-                                     (void **)&p->video_dev);
-    if (FAILED(hr))
+    if (!d3d11_check_decoding(p->d3d11_device)) {
+        MP_VERBOSE(hw, "D3D11 video decoding not supported on this system.\n");
         goto fail;
-
-    ID3D11Device_GetImmediateContext(p->d3d11_device, &p->device_ctx);
-    if (!p->device_ctx)
-        goto fail;
-    hr = ID3D11DeviceContext_QueryInterface(p->device_ctx, &IID_ID3D11VideoContext,
-                                            (void **)&p->video_ctx);
-    if (FAILED(hr))
-        goto fail;
+    }
 
     EGLint attrs[] = {
         EGL_BUFFER_SIZE, 32,
@@ -214,6 +189,7 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
     gl->BindTexture(GL_TEXTURE_2D, 0);
 
     params->imgfmt = IMGFMT_RGB0;
+    params->hw_subfmt = 0;
     return 0;
 }
 

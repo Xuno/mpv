@@ -100,24 +100,24 @@ void gl_upload_tex(GL *gl, GLenum target, GLenum format, GLenum type,
     gl->PixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
-mp_image_t *gl_read_window_contents(GL *gl)
+mp_image_t *gl_read_window_contents(GL *gl, int w, int h)
 {
     if (gl->es)
         return NULL; // ES can't read from front buffer
-    GLint vp[4]; //x, y, w, h
-    gl->GetIntegerv(GL_VIEWPORT, vp);
-    mp_image_t *image = mp_image_alloc(IMGFMT_RGB24, vp[2], vp[3]);
+    mp_image_t *image = mp_image_alloc(IMGFMT_RGB24, w, h);
     if (!image)
         return NULL;
+    gl->BindFramebuffer(GL_FRAMEBUFFER, gl->main_fb);
+    GLenum obj = gl->main_fb ? GL_COLOR_ATTACHMENT0 : GL_FRONT;
     gl->PixelStorei(GL_PACK_ALIGNMENT, 1);
-    gl->ReadBuffer(GL_FRONT);
+    gl->ReadBuffer(obj);
     //flip image while reading (and also avoid stride-related trouble)
-    for (int y = 0; y < vp[3]; y++) {
-        gl->ReadPixels(vp[0], vp[1] + vp[3] - y - 1, vp[2], 1,
-                       GL_RGB, GL_UNSIGNED_BYTE,
+    for (int y = 0; y < h; y++) {
+        gl->ReadPixels(0, h - y - 1, w, 1, GL_RGB, GL_UNSIGNED_BYTE,
                        image->planes[0] + y * image->stride[0]);
     }
     gl->PixelStorei(GL_PACK_ALIGNMENT, 4);
+    gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
     return image;
 }
 
@@ -287,6 +287,8 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
 
     GLenum filter = fbo->tex_filter;
 
+    fbotex_uninit(fbo);
+
     *fbo = (struct fbotex) {
         .gl = gl,
         .rw = w,
@@ -426,16 +428,11 @@ enum uniform_type {
     UT_i,
     UT_f,
     UT_m,
-    UT_buffer,
 };
 
 union uniform_val {
     GLfloat f[9];
     GLint i[4];
-    struct {
-        char* text;
-        GLint binding;
-    } buffer;
 };
 
 struct sc_uniform {
@@ -445,6 +442,9 @@ struct sc_uniform {
     int size;
     GLint loc;
     union uniform_val v;
+    // Set for sampler uniforms.
+    GLenum tex_target;
+    GLuint tex_handle;
 };
 
 struct sc_cached_uniform {
@@ -473,6 +473,7 @@ struct gl_shader_cache {
     bstr prelude_text;
     bstr header_text;
     bstr text;
+    int next_texture_unit;
     struct gl_vao *vao;
 
     struct sc_entry *entries;
@@ -480,6 +481,9 @@ struct gl_shader_cache {
 
     struct sc_uniform *uniforms;
     int num_uniforms;
+
+    // For checking that the user is calling gl_sc_reset() properly.
+    bool needs_reset;
 
     bool error_state; // true if an error occurred
 
@@ -494,20 +498,37 @@ struct gl_shader_cache *gl_sc_create(GL *gl, struct mp_log *log)
         .gl = gl,
         .log = log,
     };
+    gl_sc_reset(sc);
     return sc;
 }
 
+// Reset the previous pass. This must be called after
+// Unbind all GL state managed by sc - the current program and texture units.
 void gl_sc_reset(struct gl_shader_cache *sc)
 {
+    GL *gl = sc->gl;
+
+    if (sc->needs_reset) {
+        gl->UseProgram(0);
+
+        for (int n = 0; n < sc->num_uniforms; n++) {
+            struct sc_uniform *u = &sc->uniforms[n];
+            if (u->type == UT_i && u->tex_target) {
+                gl->ActiveTexture(GL_TEXTURE0 + u->v.i[0]);
+                gl->BindTexture(u->tex_target, 0);
+            }
+        }
+        gl->ActiveTexture(GL_TEXTURE0);
+    }
+
     sc->prelude_text.len = 0;
     sc->header_text.len = 0;
     sc->text.len = 0;
-    for (int n = 0; n < sc->num_uniforms; n++) {
+    for (int n = 0; n < sc->num_uniforms; n++)
         talloc_free(sc->uniforms[n].name);
-        if (sc->uniforms[n].type == UT_buffer)
-            talloc_free(sc->uniforms[n].v.buffer.text);
-    }
     sc->num_uniforms = 0;
+    sc->next_texture_unit = 1; // not 0, as 0 is "free for use"
+    sc->needs_reset = false;
 }
 
 static void sc_flush_cache(struct gl_shader_cache *sc)
@@ -613,6 +634,7 @@ const char* mp_sampler_type(GLenum texture_target)
     }
 }
 
+// gl_sc_uniform_tex() should be preferred.
 void gl_sc_uniform_sampler(struct gl_shader_cache *sc, char *name, GLenum target,
                            int unit)
 {
@@ -621,15 +643,31 @@ void gl_sc_uniform_sampler(struct gl_shader_cache *sc, char *name, GLenum target
     u->size = 1;
     u->glsl_type = mp_sampler_type(target);
     u->v.i[0] = unit;
+    u->tex_target = 0;
+    u->tex_handle = 0;
 }
 
-void gl_sc_uniform_sampler_ui(struct gl_shader_cache *sc, char *name, int unit)
+void gl_sc_uniform_tex(struct gl_shader_cache *sc, char *name, GLenum target,
+                       GLuint texture)
+{
+    struct sc_uniform *u = find_uniform(sc, name);
+    u->type = UT_i;
+    u->size = 1;
+    u->glsl_type = mp_sampler_type(target);
+    u->v.i[0] = sc->next_texture_unit++;
+    u->tex_target = target;
+    u->tex_handle = texture;
+}
+
+void gl_sc_uniform_tex_ui(struct gl_shader_cache *sc, char *name, GLuint texture)
 {
     struct sc_uniform *u = find_uniform(sc, name);
     u->type = UT_i;
     u->size = 1;
     u->glsl_type = sc->gl->es ? "highp usampler2D" : "usampler2D";
-    u->v.i[0] = unit;
+    u->v.i[0] = sc->next_texture_unit++;
+    u->tex_target = GL_TEXTURE_2D;
+    u->tex_handle = texture;
 }
 
 void gl_sc_uniform_f(struct gl_shader_cache *sc, char *name, GLfloat f)
@@ -709,15 +747,6 @@ void gl_sc_uniform_mat3(struct gl_shader_cache *sc, char *name,
         transpose3x3(&u->v.f[0]);
 }
 
-void gl_sc_uniform_buffer(struct gl_shader_cache *sc, char *name,
-                          const char *text, int binding)
-{
-    struct sc_uniform *u = find_uniform(sc, name);
-    u->type = UT_buffer;
-    u->v.buffer.text = talloc_strdup(sc, text);
-    u->v.buffer.binding = binding;
-}
-
 // This will call glBindAttribLocation() on the shader before it's linked
 // (OpenGL requires this to happen before linking). Basically, it associates
 // the input variable names with the fields in the vao.
@@ -755,6 +784,11 @@ static void update_uniform(GL *gl, struct sc_entry *e, struct sc_uniform *u, int
             memcpy(un->v.i, u->v.i, sizeof(u->v.i));
             gl->Uniform1i(loc, u->v.i[0]);
         }
+        // For samplers: set the actual texture.
+        if (u->tex_target) {
+            gl->ActiveTexture(GL_TEXTURE0 + u->v.i[0]);
+            gl->BindTexture(u->tex_target, u->tex_handle);
+        }
         break;
     case UT_f:
         if (memcmp(un->v.f, u->v.f, sizeof(u->v.f)) != 0) {
@@ -779,11 +813,6 @@ static void update_uniform(GL *gl, struct sc_entry *e, struct sc_uniform *u, int
             }
         }
         break;
-    case UT_buffer: {
-        GLuint idx = gl->GetUniformBlockIndex(e->gl_shader, u->name);
-        gl->UniformBlockBinding(e->gl_shader, idx, u->v.buffer.binding);
-        break;
-    }
     default:
         abort();
     }
@@ -797,9 +826,9 @@ static void compile_attach_shader(struct gl_shader_cache *sc, GLuint program,
     GLuint shader = gl->CreateShader(type);
     gl->ShaderSource(shader, 1, &source, NULL);
     gl->CompileShader(shader);
-    GLint status;
+    GLint status = 0;
     gl->GetShaderiv(shader, GL_COMPILE_STATUS, &status);
-    GLint log_length;
+    GLint log_length = 0;
     gl->GetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
 
     int pri = status ? (log_length > 1 ? MSGL_V : MSGL_DEBUG) : MSGL_ERR;
@@ -837,9 +866,9 @@ static void link_shader(struct gl_shader_cache *sc, GLuint program)
 {
     GL *gl = sc->gl;
     gl->LinkProgram(program);
-    GLint status;
+    GLint status = 0;
     gl->GetProgramiv(program, GL_LINK_STATUS, &status);
-    GLint log_length;
+    GLint log_length = 0;
     gl->GetProgramiv(program, GL_INFO_LOG_LENGTH, &log_length);
 
     int pri = status ? (log_length > 1 ? MSGL_V : MSGL_DEBUG) : MSGL_ERR;
@@ -884,13 +913,19 @@ static GLuint create_program(struct gl_shader_cache *sc, const char *vertex,
 // 1. Generate vertex and fragment shaders from the fragment shader text added
 //    with gl_sc_add(). The generated shader program is cached (based on the
 //    text), so actual compilation happens only the first time.
-// 2. Update the uniforms set with gl_sc_uniform_*.
+// 2. Update the uniforms and textures set with gl_sc_uniform_*.
 // 3. Make the new shader program current (glUseProgram()).
-// 4. Reset the sc state and prepare for a new shader program. (All uniforms
+// After that, you render, and then you call gc_sc_reset(), which does:
+// 1. Unbind the program and all textures.
+// 2. Reset the sc state and prepare for a new shader program. (All uniforms
 //    and fragment operations needed for the next program have to be re-added.)
-void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
+void gl_sc_generate(struct gl_shader_cache *sc)
 {
     GL *gl = sc->gl;
+
+    // gl_sc_reset() must be called after ending the previous render process,
+    // and before starting a new one.
+    assert(!sc->needs_reset);
 
     assert(sc->vao);
 
@@ -952,11 +987,7 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
     ADD_BSTR(frag, *frag_vaos);
     for (int n = 0; n < sc->num_uniforms; n++) {
         struct sc_uniform *u = &sc->uniforms[n];
-        if (u->type == UT_buffer) {
-            ADD(frag, "uniform %s { %s };\n", u->name, u->v.buffer.text);
-        } else {
-            ADD(frag, "uniform %s %s;\n", u->glsl_type, u->name);
-        }
+        ADD(frag, "uniform %s %s;\n", u->glsl_type, u->name);
     }
 
     // Additional helpers.
@@ -1001,6 +1032,7 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
     // build vertex shader from vao and cache the locations of the uniform variables
     if (!entry->gl_shader) {
         entry->gl_shader = create_program(sc, vert->start, frag->start);
+        entry->num_uniforms = 0;
         for (int n = 0; n < sc->num_uniforms; n++) {
             struct sc_cached_uniform un = {
                 .loc = gl->GetUniformLocation(entry->gl_shader,
@@ -1017,5 +1049,203 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
     for (int n = 0; n < sc->num_uniforms; n++)
         update_uniform(gl, entry, &sc->uniforms[n], n);
 
-    gl_sc_reset(sc);
+    gl->ActiveTexture(GL_TEXTURE0);
+
+    sc->needs_reset = true;
+}
+
+// Maximum number of simultaneous query objects to keep around. Reducing this
+// number might cause rendering to block until the result of a previous query is
+// available
+#define QUERY_OBJECT_NUM 8
+
+// How many samples to keep around, for the sake of average and peak
+// calculations. This corresponds to a few seconds (exact time variable)
+#define QUERY_SAMPLE_SIZE 256
+
+struct gl_timer {
+    GL *gl;
+    GLuint query[QUERY_OBJECT_NUM];
+    int query_idx;
+
+    GLuint64 samples[QUERY_SAMPLE_SIZE];
+    int sample_idx;
+    int sample_count;
+
+    uint64_t avg_sum;
+    uint64_t peak;
+};
+
+int gl_timer_sample_count(struct gl_timer *timer)
+{
+    return timer->sample_count;
+}
+
+uint64_t gl_timer_last_us(struct gl_timer *timer)
+{
+    return timer->samples[(timer->sample_idx - 1) % QUERY_SAMPLE_SIZE] / 1000;
+}
+
+uint64_t gl_timer_avg_us(struct gl_timer *timer)
+{
+    if (timer->sample_count <= 0)
+        return 0;
+
+    return timer->avg_sum / timer->sample_count / 1000;
+}
+
+uint64_t gl_timer_peak_us(struct gl_timer *timer)
+{
+    return timer->peak / 1000;
+}
+
+struct gl_timer *gl_timer_create(GL *gl)
+{
+    struct gl_timer *timer = talloc_ptrtype(NULL, timer);
+    *timer = (struct gl_timer){ .gl = gl };
+
+    if (gl->GenQueries)
+        gl->GenQueries(QUERY_OBJECT_NUM, timer->query);
+
+    return timer;
+}
+
+void gl_timer_free(struct gl_timer *timer)
+{
+    if (!timer)
+        return;
+
+    GL *gl = timer->gl;
+    if (gl && gl->DeleteQueries) {
+        // this is a no-op on already uninitialized queries
+        gl->DeleteQueries(QUERY_OBJECT_NUM, timer->query);
+    }
+
+    talloc_free(timer);
+}
+
+static void gl_timer_record(struct gl_timer *timer, GLuint64 new)
+{
+    // Input res into the buffer and grab the previous value
+    GLuint64 old = timer->samples[timer->sample_idx];
+    timer->samples[timer->sample_idx++] = new;
+    timer->sample_idx %= QUERY_SAMPLE_SIZE;
+
+    // Update average and sum
+    timer->avg_sum = timer->avg_sum + new - old;
+    timer->sample_count = MPMIN(timer->sample_count + 1, QUERY_SAMPLE_SIZE);
+
+    // Update peak if necessary
+    if (new >= timer->peak) {
+        timer->peak = new;
+    } else if (timer->peak == old) {
+        // It's possible that the last peak was the value we just removed,
+        // if so we need to scan for the new peak
+        uint64_t peak = new;
+        for (int i = 0; i < QUERY_SAMPLE_SIZE; i++)
+            peak = MPMAX(peak, timer->samples[i]);
+        timer->peak = peak;
+    }
+}
+
+// If no free query is available, this can block. Shouldn't ever happen in
+// practice, though. (If it does, consider increasing QUERY_OBJECT_NUM)
+// IMPORTANT: only one gl_timer object may ever be active at a single time.
+// The caling code *MUST* ensure this
+void gl_timer_start(struct gl_timer *timer)
+{
+    GL *gl = timer->gl;
+    if (!gl->BeginQuery)
+        return;
+
+    // Get the next query object
+    GLuint id = timer->query[timer->query_idx++];
+    timer->query_idx %= QUERY_OBJECT_NUM;
+
+    // If this query object already holds a result, we need to get and
+    // record it first
+    if (gl->IsQuery(id)) {
+        GLuint64 elapsed;
+        gl->GetQueryObjectui64v(id, GL_QUERY_RESULT, &elapsed);
+        gl_timer_record(timer, elapsed);
+    }
+
+    gl->BeginQuery(GL_TIME_ELAPSED, id);
+}
+
+void gl_timer_stop(struct gl_timer *timer)
+{
+    GL *gl = timer->gl;
+    if (gl->EndQuery)
+        gl->EndQuery(GL_TIME_ELAPSED);
+}
+
+// Upload a texture, going through a PBO. PBO supposedly can facilitate
+// asynchronous copy from CPU to GPU, so this is an optimization. Note that
+// changing format/type/tex_w/tex_h or reusing the PBO in the same frame can
+// ruin performance.
+// This call is like gl_upload_tex(), plus PBO management/use.
+// target, format, type, dataptr, stride, x, y, w, h: texture upload params
+//                                                    (see gl_upload_tex())
+// tex_w, tex_h: maximum size of the used texture
+// use_pbo: for convenience, if false redirects the call to gl_upload_tex
+void gl_pbo_upload_tex(struct gl_pbo_upload *pbo, GL *gl, bool use_pbo,
+                       GLenum target, GLenum format, GLenum type,
+                       int tex_w, int tex_h, const void *dataptr, int stride,
+                       int x, int y, int w, int h)
+{
+    assert(x >= 0 && y >= 0 && w >= 0 && h >= 0);
+    assert(x + w <= tex_w && y + h <= tex_h);
+
+    if (!use_pbo || !gl->MapBufferRange)
+        goto no_pbo;
+
+    size_t pix_stride = gl_bytes_per_pixel(format, type);
+    size_t buffer_size = pix_stride * tex_w * tex_h;
+    size_t needed_size = pix_stride * w * h;
+
+    if (buffer_size != pbo->buffer_size)
+        gl_pbo_upload_uninit(pbo);
+
+    if (!pbo->buffers[0]) {
+        pbo->gl = gl;
+        pbo->buffer_size = buffer_size;
+        gl->GenBuffers(NUM_PBO_BUFFERS, &pbo->buffers[0]);
+        for (int n = 0; n < NUM_PBO_BUFFERS; n++) {
+            gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo->buffers[n]);
+            gl->BufferData(GL_PIXEL_UNPACK_BUFFER, buffer_size, NULL,
+                           GL_DYNAMIC_COPY);
+        }
+    }
+
+    pbo->index = (pbo->index + 1) % NUM_PBO_BUFFERS;
+
+    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo->buffers[pbo->index]);
+    void *data = gl->MapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, needed_size,
+                                    GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+    if (!data)
+        goto no_pbo;
+
+    memcpy_pic(data, dataptr, pix_stride * w,  h, pix_stride * w, stride);
+
+    if (!gl->UnmapBuffer(GL_PIXEL_UNPACK_BUFFER)) {
+        gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        goto no_pbo;
+    }
+
+    gl_upload_tex(gl, target, format, type, NULL, pix_stride * w, x, y, w, h);
+
+    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+    return;
+
+no_pbo:
+    gl_upload_tex(gl, target, format, type, dataptr, stride, x, y, w, h);
+}
+
+void gl_pbo_upload_uninit(struct gl_pbo_upload *pbo)
+{
+    if (pbo->gl)
+        pbo->gl->DeleteBuffers(NUM_PBO_BUFFERS, &pbo->buffers[0]);
+    *pbo = (struct gl_pbo_upload){0};
 }

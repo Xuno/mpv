@@ -19,8 +19,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <initguid.h>
-
 #define DXVA2API_USE_BITFIELDS
 #include <libavcodec/dxva2.h>
 
@@ -34,7 +32,7 @@
 
 #include "d3d.h"
 
-#define ADDITIONAL_SURFACES (4 + HWDEC_DELAY_QUEUE_COUNT)
+#define ADDITIONAL_SURFACES (HWDEC_EXTRA_SURFACES + HWDEC_DELAY_QUEUE_COUNT)
 
 struct priv {
     struct mp_log *log;
@@ -89,9 +87,6 @@ static struct mp_image *dxva2_new_ref(IDirectXVideoDecoder *decoder,
     mp_image_set_size(mpi, w, h);
     mpi->planes[3] = (void *)surface->surface;
     return mpi;
-fail:
-    dxva2_release_img(surface);
-    return NULL;
 }
 
 static struct mp_image *dxva2_allocate_image(struct lavc_ctx *s, int w, int h)

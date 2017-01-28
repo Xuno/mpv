@@ -112,6 +112,19 @@ static bool update_subtitle(struct MPContext *mpctx, double video_pts,
     if (mpctx->current_track[0][STREAM_SUB] == track && !mpctx->video_out)
         term_osd_set_subs(mpctx, sub_get_text(dec_sub, video_pts));
 
+    // Handle displaying subtitles on VO with no video being played. This is
+    // quite differently, because normally subtitles are redrawn on new video
+    // frames, using the video frames' timestamps.
+    if (mpctx->video_out && mpctx->video_status == STATUS_EOF) {
+        if (osd_get_force_video_pts(mpctx->osd) != video_pts) {
+            osd_set_force_video_pts(mpctx->osd, video_pts);
+            osd_query_and_reset_want_redraw(mpctx->osd);
+            vo_redraw(mpctx->video_out);
+            // Force an arbitrary minimum FPS
+            mp_set_timeout(mpctx, 0.1);
+        }
+    }
+
     return true;
 }
 
@@ -183,6 +196,9 @@ void reinit_sub(struct MPContext *mpctx, struct track *track)
     int order = get_order(mpctx, track);
     osd_set_sub(mpctx->osd, order, track->d_sub);
     sub_control(track->d_sub, SD_CTRL_SET_TOP, &(bool){!!order});
+
+    if (mpctx->playback_initialized)
+        update_subtitles(mpctx, mpctx->playback_pts);
 }
 
 void reinit_sub_all(struct MPContext *mpctx)

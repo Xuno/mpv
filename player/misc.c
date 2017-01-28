@@ -17,7 +17,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
-#include <pthread.h>
+#include <errno.h>
 #include <assert.h>
 
 #include "config.h"
@@ -90,7 +90,25 @@ double get_play_end_pts(struct MPContext *mpctx)
         if (cend != MP_NOPTS_VALUE && (end == MP_NOPTS_VALUE || cend < end))
             end = cend;
     }
+    if (mpctx->ab_loop_clip && opts->ab_loop[1] != MP_NOPTS_VALUE &&
+        opts->ab_loop[1] > opts->ab_loop[0])
+    {
+        if (end == MP_NOPTS_VALUE || end > opts->ab_loop[1])
+            end = opts->ab_loop[1];
+    }
     return end;
+}
+
+double get_track_seek_offset(struct MPContext *mpctx, struct track *track)
+{
+    struct MPOpts *opts = mpctx->opts;
+    if (track->selected) {
+        if (track->type == STREAM_AUDIO)
+            return -opts->audio_delay;
+        if (track->type == STREAM_SUB)
+            return -opts->sub_delay;
+    }
+    return 0;
 }
 
 float mp_get_cache_percent(struct MPContext *mpctx)
@@ -113,10 +131,10 @@ bool mp_get_cache_idle(struct MPContext *mpctx)
 
 void update_vo_playback_state(struct MPContext *mpctx)
 {
-    if (mpctx->video_out) {
+    if (mpctx->video_out && mpctx->video_out->config_ok) {
         struct voctrl_playback_state oldstate = mpctx->vo_playback_state;
         struct voctrl_playback_state newstate = {
-            .taskbar_progress = mpctx->opts->vo.taskbar_progress,
+            .taskbar_progress = mpctx->opts->vo->taskbar_progress,
             .playing = mpctx->playing,
             .paused = mpctx->paused,
             .percent_pos = get_percent_pos(mpctx),
@@ -131,8 +149,8 @@ void update_vo_playback_state(struct MPContext *mpctx)
             if ((oldstate.playing && oldstate.taskbar_progress) ||
                 (newstate.playing && newstate.taskbar_progress))
             {
-                vo_control(mpctx->video_out,
-                           VOCTRL_UPDATE_PLAYBACK_STATE, &newstate);
+                vo_control_async(mpctx->video_out,
+                                 VOCTRL_UPDATE_PLAYBACK_STATE, &newstate);
             }
             mpctx->vo_playback_state = newstate;
         }
@@ -183,7 +201,7 @@ void error_on_track(struct MPContext *mpctx, struct track *track)
         if (mpctx->error_playing >= 0)
             mpctx->error_playing = MPV_ERROR_NOTHING_TO_PLAY;
     }
-    mpctx->sleeptime = 0;
+    mp_wakeup_core(mpctx);
 }
 
 int stream_dump(struct MPContext *mpctx, const char *source_filename)
@@ -195,20 +213,34 @@ int stream_dump(struct MPContext *mpctx, const char *source_filename)
 
     int64_t size = stream_get_size(stream);
 
-    stream_set_capture_file(stream, opts->stream_dump);
+    FILE *dest = fopen(opts->stream_dump, "wb");
+    if (!dest) {
+        MP_ERR(mpctx, "Error opening dump file: %s\n", mp_strerror(errno));
+        return -1;
+    }
 
-    while (mpctx->stop_play == KEEP_PLAYING && !stream->eof) {
+    bool ok = true;
+
+    while (mpctx->stop_play == KEEP_PLAYING && ok) {
         if (!opts->quiet && ((stream->pos / (1024 * 1024)) % 2) == 1) {
             uint64_t pos = stream->pos;
             MP_MSG(mpctx, MSGL_STATUS, "Dumping %lld/%lld...",
                    (long long int)pos, (long long int)size);
         }
-        stream_fill_buffer(stream);
-        mp_process_input(mpctx);
+        bstr data = stream_peek(stream, STREAM_MAX_BUFFER_SIZE);
+        if (data.len == 0) {
+            ok &= stream->eof;
+            break;
+        }
+        ok &= fwrite(data.start, data.len, 1, dest) == 1;
+        stream_skip(stream, data.len);
+        mp_wakeup_core(mpctx); // don't actually sleep
+        mp_idle(mpctx); // but process input
     }
 
+    ok &= fclose(dest) == 0;
     free_stream(stream);
-    return 0;
+    return ok ? 0 : -1;
 }
 
 void merge_playlist_files(struct playlist *pl)
@@ -231,67 +263,4 @@ void merge_playlist_files(struct playlist *pl)
     playlist_clear(pl);
     playlist_add_file(pl, edl);
     talloc_free(edl);
-}
-
-// Create a talloc'ed copy of mpctx->global. It contains a copy of the global
-// option struct. It still just references some things though, like mp_log.
-// The main purpose is letting threads access the option struct without the
-// need for additional synchronization.
-struct mpv_global *create_sub_global(struct MPContext *mpctx)
-{
-    struct mpv_global *new = talloc_ptrtype(NULL, new);
-    struct m_config *new_config = m_config_dup(new, mpctx->mconfig);
-    *new = (struct mpv_global){
-        .log = mpctx->global->log,
-        .opts = new_config->optstruct,
-        .client_api = mpctx->clients,
-    };
-    return new;
-}
-
-struct wrapper_args {
-    struct MPContext *mpctx;
-    void (*thread_fn)(void *);
-    void *thread_arg;
-    pthread_mutex_t mutex;
-    bool done;
-};
-
-static void *thread_wrapper(void *pctx)
-{
-    struct wrapper_args *args = pctx;
-    mpthread_set_name("opener");
-    args->thread_fn(args->thread_arg);
-    pthread_mutex_lock(&args->mutex);
-    args->done = true;
-    pthread_mutex_unlock(&args->mutex);
-    mp_input_wakeup(args->mpctx->input); // this interrupts mp_idle()
-    return NULL;
-}
-
-// Run the thread_fn in a new thread. Wait until the thread returns, but while
-// waiting, process input and input commands.
-int mpctx_run_reentrant(struct MPContext *mpctx, void (*thread_fn)(void *arg),
-                        void *thread_arg)
-{
-    struct wrapper_args args = {mpctx, thread_fn, thread_arg};
-    pthread_mutex_init(&args.mutex, NULL);
-    bool success = false;
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, thread_wrapper, &args))
-        goto done;
-    while (!success) {
-        mp_idle(mpctx);
-
-        if (mpctx->stop_play)
-            mp_cancel_trigger(mpctx->playback_abort);
-
-        pthread_mutex_lock(&args.mutex);
-        success |= args.done;
-        pthread_mutex_unlock(&args.mutex);
-    }
-    pthread_join(thread, NULL);
-done:
-    pthread_mutex_destroy(&args.mutex);
-    return success ? 0 : -1;
 }

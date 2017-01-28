@@ -9,6 +9,8 @@ a media player
 :Manual section: 1
 :Manual group: multimedia
 
+.. contents:: Table of Contents
+
 SYNOPSIS
 ========
 
@@ -138,16 +140,16 @@ L
     Toggle infinite looping.
 
 Ctrl + and Ctrl -
-    Adjust audio delay by +/- 0.1 seconds.
+    Adjust audio delay (A/V sync) by +/- 0.1 seconds.
 
 u
     Switch between applying no style overrides to SSA/ASS subtitles, and
     overriding them almost completely with the normal subtitle style. See
-    ``--ass-style-override`` for more info.
+    ``--sub-ass-style-override`` for more info.
 
 V
     Toggle subtitle VSFilter aspect compatibility mode. See
-    ``--ass-vsfilter-aspect-compat`` for more info.
+    ``--sub-ass-vsfilter-aspect-compat`` for more info.
 
 r and t
     Move subtitles up/down.
@@ -208,9 +210,6 @@ Alt+2 (and command+2 on OSX)
 command + f (OSX only)
     Toggle fullscreen (see also ``--fs``).
 
-command + [ and command + ] (OSX only)
-    Set video window alpha.
-
 (The following keys are valid if you have a keyboard with multimedia keys.)
 
 PAUSE
@@ -244,12 +243,40 @@ button 5 and button 6
 USAGE
 =====
 
+Command line arguments starting with ``-`` are interpreted as options,
+everything else as filenames or URLs. All options except *flag* options (or
+choice options which include ``yes``) require a parameter in the form
+``--option=value``.
+
+One exception is the lone ``-`` (without anything else), which means media data
+will be read from stdin. Also, ``--`` (without anything else) will make the
+player interpret all following arguments as filenames, even if they start with
+``-``. (To play a file named ``-``, you need to use ``./-``.)
+
 Every *flag* option has a *no-flag* counterpart, e.g. the opposite of the
 ``--fs`` option is ``--no-fs``. ``--fs=yes`` is same as ``--fs``, ``--fs=no``
 is the same as ``--no-fs``.
 
 If an option is marked as *(XXX only)*, it will only work in combination with
 the *XXX* option or if *XXX* is compiled in.
+
+Legacy option syntax
+--------------------
+
+The ``--option=value`` syntax is not strictly enforced, and the alternative
+legacy syntax ``-option value`` and ``--option value`` will also work. This is
+mostly  for compatibility with MPlayer. Using these should be avoided. Their
+semantics can change any time in the future.
+
+For example, the alternative syntax will consider an argument following the
+option a filename. ``mpv -fs no`` will attempt to play a file named ``no``,
+because ``--fs`` is a flag option that requires no parameter. If an option
+changes and its parameter becomes optional, then a command line using the
+alternative syntax will break.
+
+Currently, the parser makes no difference whether an option starts with ``--``
+or a single ``-``. This might also change in the future, and ``--option value``
+might always interpret ``value`` as filename in order to reduce ambiguities.
 
 Escaping spaces and other special characters
 --------------------------------------------
@@ -268,15 +295,16 @@ command line.
 The suboption parser can quote strings with ``"`` and ``[...]``.
 Additionally, there is a special form of quoting with ``%n%`` described below.
 
-For example, the ``opengl`` VO can take multiple options:
+For example, assume the hypothetical ``foo`` filter can take multiple options:
 
-    ``mpv test.mkv --vo=opengl:scale=lanczos:icc-profile=file.icc,xv``
+    ``mpv test.mkv --vf=foo:option1=value1:option2:option3=value3,bar``
 
-This passes ``scale=lanczos`` and ``icc-profile=file.icc`` to ``opengl``,
-and also specifies ``xv`` as fallback VO. If the icc-profile path contains
-spaces or characters like ``,`` or ``:``, you need to quote them:
+This passes ``option1`` and ``option3`` to the ``foo`` filter, with ``option2``
+as flag (implicitly ``option2=yes``), and adds a ``bar`` filter after that. If
+an option contains spaces or characters like ``,`` or ``:``, you need to quote
+them:
 
-    ``mpv '--vo=opengl:icc-profile="file with spaces.icc",xv'``
+    ``mpv '--vf=foo:option1="option value with spaces",bar'``
 
 Shells may actually strip some quotes from the string passed to the commandline,
 so the example quotes the string twice, ensuring that mpv receives the ``"``
@@ -297,11 +325,11 @@ It is started with ``%`` and has the following format::
 
 .. admonition:: Examples
 
-    ``mpv --ao=pcm:file=%10%C:test.wav test.avi``
+    ``mpv '--vf=foo:option1=%11%quoted text' test.avi``
 
     Or in a script:
 
-    ``mpv --ao=pcm:file=%`expr length "$NAME"`%"$NAME" test.avi``
+    ``mpv --vf=foo:option1=%`expr length "$NAME"`%"$NAME" test.avi``
 
 Suboptions passed to the client API are also subject to escaping. Using
 ``mpv_set_option_string()`` is exactly like passing ``--name=data`` to the
@@ -309,8 +337,7 @@ command line (but without shell processing of the string). Some options
 support passing values in a more structured way instead of flat strings, and
 can avoid the suboption parsing mess. For example, ``--vf`` supports
 ``MPV_FORMAT_NODE``, which lets you pass suboptions as a nested data structure
-of maps and arrays. (``--vo`` supports this in the same way, although this
-fact is undocumented.)
+of maps and arrays.
 
 Paths
 -----
@@ -431,7 +458,7 @@ tree and play the longest title.
     a bitmap video stream which can be superimposed over the main
     movie. mpv's subtitle styling and positioning options and keyboard
     shortcuts generally do not work with image-based subtitles.
-    Exceptions include options like ``--stretch-dvd-subs`` and 
+    Exceptions include options like ``--stretch-dvd-subs`` and
     ``--stretch-image-subs-to-screen``.
 
 
@@ -528,7 +555,8 @@ profile name ``default`` to continue with normal options.
 
         [slow]
         profile-desc="some profile name"
-        vo=opengl:scale=ewa_lanczos:scale-radius=16
+        # reference a builtin profile
+        profile=opengl-hq
 
         [fast]
         vo=vdpau
@@ -549,10 +577,6 @@ Some profiles are loaded automatically. The following example demonstrates this:
 
     ::
 
-        [vo.vdpau]
-        # Use hardware decoding
-        hwdec=vdpau
-
         [protocol.dvd]
         profile-desc="profile for dvd:// streams"
         alang=en
@@ -561,11 +585,7 @@ Some profiles are loaded automatically. The following example demonstrates this:
         profile-desc="profile for .flv files"
         vf=flip
 
-        [ao.alsa]
-        device=spdif
-
-The profile name follows the schema ``type.name``, where type can be ``vo``
-to match the value the ``--vo`` option is set to, ``ao`` for ``--ao``,
+The profile name follows the schema ``type.name``, where type can be
 ``protocol`` for the input/output protocol in use (see ``--list-protocols``),
 and ``extension`` for the extension of the path of the currently played file
 (*not* the file format).
@@ -653,6 +673,19 @@ PROTOCOLS
     either aliases to documented protocols, or are just redirections to
     protocols implemented and documented in FFmpeg.
 
+    ``data:`` is supported in FFmpeg (not in Libav), but needs to be in the
+    format ``data://``. This is done to avoid ambiguity with filenames. You
+    can also prefix it with ``lavf://`` or ``ffmpeg://``.
+
+``ytdl://...``
+    By default, the youtube-dl hook script (enabled by default for mpv CLI)
+    only looks at http URLs. Prefixing an URL with ``ytdl://`` forces it to
+    be always processed by the script. This can also be used to invoke special
+    youtube-dl functionality like playing a video by ID or invoking search.
+
+    Keep in mind that you can't pass youtube-dl command line options by this,
+    and you have to use ``--ytdl-raw-options`` instead.
+
 ``-``
     Play data from stdin.
 
@@ -688,7 +721,7 @@ PROTOCOLS
 ``mf://[filemask|@listfile]`` ``--mf-...``
     Play a series of images as video.
 
-``cdda://track[-endtrack][:speed][/device]`` ``--cdrom-device=PATH`` ``--cdda-...``
+``cdda://[device]`` ``--cdrom-device=PATH`` ``--cdda-...``
     Play CD.
 
 ``lavf://...``
@@ -743,24 +776,32 @@ Currently this happens only in the following cases:
   or file associations provided by desktop environments)
 - if started from explorer.exe on Windows (technically, if it was started on
   Windows, and all of the stdout/stderr/stdin handles are unset)
-- manually adding ``--profile=pseudo-gui`` to the command line
+- started out of the bundle on OSX
+- if you manually use ``--player-operation-mode=pseudo-gui`` on the command line
 
-This mode implicitly adds ``--profile=pseudo-gui`` to the command line, with
-the ``pseudo-gui`` profile being predefined with the following contents:
+This mode applies options from the builtin profile ``builtin-pseudo-gui``, but
+only if these haven't been set in the user's config file or on the command line.
+Also, for compatibility with the old pseudo-gui behavior, the options in the
+``pseudo-gui`` profile are applied unconditionally. In addition, the profile
+makes sure to enable the pseudo-GUI mode, so that ``--profile=pseudo-gui``
+works like in older mpv releases. The profiles are currently defined as follows:
 
 ::
 
-    [pseudo-gui]
+    [builtin-pseudo-gui]
     terminal=no
     force-window=yes
     idle=once
     screenshot-directory=~~desktop/
+    [pseudo-gui]
+    player-operation-mode=pseudo-gui
 
-This follows the mpv config file format. To customize pseudo-GUI mode, you can
-put your own ``pseudo-gui`` profile into your ``mpv.conf``. This profile will
-enhance the default profile, rather than overwrite it.
+.. warning::
 
-The profile always overrides other settings in ``mpv.conf``.
+    Currently, you can extend the ``pseudo-gui`` profile in the config file the
+    normal way. This is deprecated. In future mpv releases, the behavior might
+    change, and not apply your additional settings, and/or use a different
+    profile name.
 
 
 .. include:: options.rst
@@ -785,14 +826,7 @@ The profile always overrides other settings in ``mpv.conf``.
 
 .. include:: changes.rst
 
-
-EMBEDDING INTO OTHER PROGRAMS (LIBMPV)
-======================================
-
-mpv can be embedded into other programs as video/audio playback backend. The
-recommended way to do so is using libmpv. See ``libmpv/client.h`` in the mpv
-source code repository. This provides a C API. Bindings for other languages
-might be available (see wiki).
+.. include:: libmpv.rst
 
 ENVIRONMENT VARIABLES
 =====================
@@ -946,7 +980,7 @@ For Windows-specifics, see `FILES ON WINDOWS`_ section.
 ``~/.config/mpv/watch_later/``
     Contains temporary config files needed for resuming playback of files with
     the watch later feature. See for example the ``Q`` key binding, or the
-    ``quit_watch_later`` input command.
+    ``quit-watch-later`` input command.
 
     Each file is a small config file which is loaded if the corresponding media
     file is loaded. It contains the playback position and some (not necessarily

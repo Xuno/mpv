@@ -95,7 +95,7 @@ List of Input Commands
     relative (default)
         Seek relative to current position (a negative value seeks backwards).
     absolute
-        Seek to a given time.
+        Seek to a given time (a negative value starts from the end of the file).
     absolute-percent
         Seek to a given percent position.
     relative-percent
@@ -459,6 +459,8 @@ Input Commands that are Possibly Subject to Change
         Remove all filters. Note that like the other sub-commands, this does
         not control automatically inserted filters.
 
+    The argument is always needed. E.g. in case of ``clr`` use ``vf clr ""``.
+
     You can assign labels to filter by prefixing them with ``@name:`` (where
     ``name`` is a user-chosen arbitrary identifier). Labels can be used to
     refer to filters by name in all of the filter chain modification commands.
@@ -524,7 +526,7 @@ Input Commands that are Possibly Subject to Change
 ``disable-section "<section>"``
     Disable the named input section. Undoes ``enable-section``.
 
-``define-section "<section>" "<contents>" [default|forced]``
+``define-section "<section>" "<contents>" [default|force]``
     Create a named input section, or replace the contents of an already existing
     input section. The ``contents`` parameter uses the same syntax as the
     ``input.conf`` file (except that using the section syntax in it is not
@@ -542,7 +544,7 @@ Input Commands that are Possibly Subject to Change
     <default> (also used if parameter omitted)
         Use a key binding defined by this section only if the user hasn't
         already bound this key to a command.
-    <forced>
+    <force>
         Always bind a key. (The input section that was made active most recently
         wins if there are ambiguities.)
 
@@ -561,29 +563,20 @@ Input Commands that are Possibly Subject to Change
     the resolution is reduced to that of the video's. You can read the
     ``osd-width`` and ``osd-height`` properties. At least with ``--vo-xv`` and
     anamorphic video (such as DVD), ``osd-par`` should be read as well, and the
-    overlay should be aspect-compensated. (Future directions: maybe mpv should
-    take care of some of these things automatically, but it's hard to tell
-    where to draw the line.)
+    overlay should be aspect-compensated.
 
     ``id`` is an integer between 0 and 63 identifying the overlay element. The
     ID can be used to add multiple overlay parts, update a part by using this
     command with an already existing ID, or to remove a part with
     ``overlay-remove``. Using a previously unused ID will add a new overlay,
-    while reusing an ID will update it. (Future directions: there should be
-    something to ensure different programs wanting to create overlays don't
-    conflict with each others, should that ever be needed.)
+    while reusing an ID will update it.
 
     ``x`` and ``y`` specify the position where the OSD should be displayed.
 
     ``file`` specifies the file the raw image data is read from. It can be
     either a numeric UNIX file descriptor prefixed with ``@`` (e.g. ``@4``),
-    or a filename. The file will be mapped into memory with ``mmap()``. Some VOs
-    will pass the mapped pointer directly to display APIs (e.g. opengl or
-    vdpau), so no actual copying is involved. Truncating the source file while
-    the overlay is active will crash the player. You shouldn't change the data
-    while the overlay is active, because the data is essentially accessed at
-    random points. Instead, call ``overlay-add`` again (preferably with a
-    different memory region to prevent tearing).
+    or a filename. The file will be mapped into memory with ``mmap()``,
+    copied, and unmapped before the command returns (changed in mpv 0.18.1).
 
     It is also possible to pass a raw memory address for use as bitmap memory
     by passing a memory address as integer prefixed with an ``&`` character.
@@ -616,15 +609,14 @@ Input Commands that are Possibly Subject to Change
     (Technically, the minimum size would be ``stride * (h - 1) + w * 4``, but
     for simplicity, the player will access all ``stride * h`` bytes.)
 
-    .. admonition:: Warning
+    .. note::
 
-        When updating the overlay, you should prepare a second shared memory
-        region (e.g. make use of the offset parameter) and add this as overlay,
-        instead of reusing the same memory every time. Otherwise, you might
-        get the equivalent of tearing, when your application and mpv write/read
-        the buffer at the same time. Also, keep in mind that mpv might access
-        an overlay's memory at random times whenever it feels the need to do
-        so, for example when redrawing the screen.
+        Before mpv 0.18.1, you had to do manual "double buffering" when updating
+        an overlay by replacing it with a different memory buffer. Since mpv
+        0.18.1, the memory is simply copied and doesn't reference any of the
+        memory indicated by the command's arguments after the commend returns.
+        If you want to use this command before mpv 0.18.1, reads the old docs
+        to see how to handle this correctly.
 
 ``overlay-remove <id>``
     Remove an overlay added with ``overlay-add`` and the same ID. Does nothing
@@ -648,7 +640,7 @@ Input Commands that are Possibly Subject to Change
     The argument is the name of the binding.
 
     It can optionally be prefixed with the name of the script, using ``/`` as
-    separator, e.g. ``script_binding scriptname/bindingname``.
+    separator, e.g. ``script-binding scriptname/bindingname``.
 
     For completeness, here is how this command works internally. The details
     could change any time. On any matching key event, ``script-message-to``
@@ -672,13 +664,6 @@ Input Commands that are Possibly Subject to Change
     Cycle through A-B loop states. The first command will set the ``A`` point
     (the ``ab-loop-a`` property); the second the ``B`` point, and the third
     will clear both points.
-
-``vo-cmdline "<args>"``
-    Reset the sub-option of the current VO. Currently works with ``opengl``
-    (including ``opengl-hq``). The argument is the sub-option string usually
-    passed to the VO on the command line. Not all sub-options can be set, but
-    those which can will be reset even if they don't appear in the argument.
-    This command might be changed or removed in the future.
 
 ``drop-buffers``
     Drop audio/video/demuxer buffers, and restart from fresh. Might help with
@@ -705,6 +690,17 @@ Input Commands that are Possibly Subject to Change
 
 ``af-command "<label>" "<cmd>" "<args>"``
     Same as ``vf-command``, but for audio filters.
+
+``apply-profile "<name>"``
+    Apply the contents of a named profile. This is like using ``profile=name``
+    in a config file, except you can map it to a key binding to change it at
+    runtime.
+
+    There is no such thing as "unapplying" a profile - applying a profile
+    merely sets all option values listed within the profile.
+
+``load-script "<path>"``
+    Load a script, similar to the ``--script`` option.
 
 Undocumented commands: ``tv-last-channel`` (TV/DVB only),
 ``ao-reload`` (experimental/internal).
@@ -817,7 +813,7 @@ Input sections group a set of bindings, and enable or disable them at once.
 In ``input.conf``, each key binding is assigned to an input section, rather
 than actually having explicit text sections.
 
-See also: ``enable_section`` and ``disable_section`` commands.
+See also: ``enable-section`` and ``disable-section`` commands.
 
 Predefined bindings:
 
@@ -846,20 +842,12 @@ an option at runtime.
 Property list
 -------------
 
-``osd-level`` (RW)
-    See ``--osd-level``.
+.. note::
 
-``osd-scale`` (RW)
-    OSD font size multiplier, see ``--osd-scale``.
-
-``loop`` (RW)
-    See ``--loop``.
-
-``loop-file`` (RW)
-    See ``--loop-file`` (uses ``yes``/``no``).
-
-``speed`` (RW)
-    See ``--speed``.
+    Most options can be set as runtime via properties as well. Just remove the
+    leading ``--`` from the option name. These are not documented. Only
+    properties which do not exist as option with the same name, or which have
+    very different behavior from the options are documented below.
 
 ``audio-speed-correction``, ``video-speed-correction``
     Factor multiplied with ``speed`` at which the player attempts to play the
@@ -876,6 +864,12 @@ Property list
     percent encoding as well. (The result is not necessarily correct, but
     looks better for display purposes. Use the ``path`` property to get an
     unmodified filename.)
+
+    This has a sub-property:
+
+    ``filename/no-ext``
+        Like the ``filename`` property, but if the text contains a ``.``, strip
+        all text after the last ``.``. Usually this removes the file extension.
 
 ``file-size``
     Length in bytes of the source file/stream. (This is the same as
@@ -913,8 +907,10 @@ Property list
     list of format names, e.g. mp4 is ``mov,mp4,m4a,3gp,3g2,mj2`` (the list
     may grow in the future for any format).
 
-``demuxer``
+``current-demuxer``
     Name of the current demuxer. (This is useless.)
+
+    (Renamed from ``demuxer``.)
 
 ``stream-path``
     Filename (full path) of the stream layer filename. (This is probably
@@ -944,14 +940,18 @@ Property list
     Total A-V sync correction done. Unavailable if audio or video is
     disabled.
 
-``drop-frame-count``
+``decoder-frame-drop-count``
     Video frames dropped by decoder, because video is too far behind audio (when
     using ``--framedrop=decoder``). Sometimes, this may be incremented in other
     situations, e.g. when video packets are damaged, or the decoder doesn't
     follow the usual rules. Unavailable if video is disabled.
 
-``vo-drop-frame-count``
+    ``drop-frame-count`` is a deprecated alias.
+
+``frame-drop-count``
     Frames dropped by VO (when using ``--framedrop=vo``).
+
+    ``vo-drop-frame-count`` is a deprecated alias.
 
 ``mistimed-frame-count``
     Number of video frames that were not timed correctly in display-sync mode
@@ -990,6 +990,12 @@ Property list
 ``time-remaining``
     Remaining length of the file in seconds. Note that the file duration is not
     always exactly known, so this is an estimate.
+
+``audio-pts`` (R)
+    Current audio playback position in current file in seconds. Unlike time-pos,
+    this updates more often than once per frame. For audio-only files, it is
+    mostly equivalent to time-pos, while for video-only files this property is
+    not available.
 
 ``playtime-remaining``
     ``time-remaining`` scaled by the current ``speed``.
@@ -1080,10 +1086,6 @@ Property list
                 "title"             MPV_FORMAT_STRING
                 "default"           MPV_FORMAT_FLAG
 
-``ab-loop-a``, ``ab-loop-b`` (RW)
-    Set/get A-B loop points. See corresponding options and ``ab-loop`` command
-    for details.
-
 ``angle`` (RW)
     Current DVD angle.
 
@@ -1156,12 +1158,11 @@ Property list
 ``af-metadata/<filter-label>``
     Equivalent to ``vf-metadata/<filter-label>``, but for audio filters.
 
-``pause`` (RW)
-    Pause status. This is usually ``yes`` or ``no``. See ``--pause``.
-
-``idle``
+``idle-active``
     Return ``yes`` if no file is loaded, but the player is staying around
     because of the ``--idle`` option.
+
+    (Renamed from ``idle``.)
 
 ``core-idle``
     Return ``yes`` if the playback core is paused, otherwise ``no``. This can
@@ -1238,36 +1239,22 @@ Property list
     is loaded, or when switching ordered chapter segments. This is because
     the same underlying code is used for seeking and resyncing.)
 
-``hr-seek`` (RW)
-    See ``--hr-seek``.
-
 ``mixer-active``
-    Return ``yes`` if the audio mixer is active, ``no`` otherwise. This has
-    implications for ``--softvol=no`` mode: if the mixer is inactive, changing
-    ``volume`` doesn't actually change anything on the system mixer. If the
-    ``--volume`` or ``--mute`` option are used, these might not be applied
-    properly until the mixer becomes active either. (The options, if set, will
-    just overwrite the mixer state at audio initialization.)
+    Return ``yes`` if the audio mixer is active, ``no`` otherwise.
 
-    While the behavior with ``mixer-active==yes`` is relatively well-defined,
-    the ``no`` case will provide possibly wrong or insignificant values.
+    This option is relatively useless. Before mpv 0.18.1, it could be used to
+    infer behavior of the ``volume`` property.
 
-    Note that an active mixer does not necessarily imply active audio output,
-    although this is implied in the current implementation.
+``ao-volume`` (RW)
+    System volume. This property is available only if mpv audio output is
+    currently active, and only if the underlying implementation supports volume
+    control. What this option does depends on the API. For example, on ALSA
+    this usually changes system-wide audio, while with PulseAudio this controls
+    per-application volume.
 
-``volume`` (RW)
-    Current volume (see ``--volume`` for details). Also see ``mixer-active``
-    property.
-
-``volume-max``
-    Current maximum value the volume property can be set to. (This may depend
-    on the ``--softvol-max`` option.)
-
-``mute`` (RW)
-    Current mute status (``yes``/``no``). Also see ``mixer-active`` property.
-
-``audio-delay`` (RW)
-    See ``--audio-delay``.
+``ao-mute`` (RW)
+    Similar to ``ao-volume``, but controls the mute state. May be unimplemented
+    even if ``ao-volume`` works.
 
 ``audio-codec``
     Audio codec selected for decoding.
@@ -1316,26 +1303,6 @@ Property list
     Same as ``audio-params``, but the format of the data written to the audio
     API.
 
-``aid`` (RW)
-    Current audio track (similar to ``--aid``).
-
-``audio`` (RW)
-    Alias for ``aid``.
-
-``balance`` (RW)
-    Audio channel balance. (The implementation of this feature is rather odd.
-    It doesn't change the volumes of each channel, but instead sets up a pan
-    matrix to mix the left and right channels.)
-
-``fullscreen`` (RW)
-    See ``--fullscreen``.
-
-``deinterlace`` (RW)
-    See ``--deinterlace``.
-
-``field-dominance`` (RW)
-    See ``--field-dominance``
-
 ``colormatrix`` (R)
     Redirects to ``video-params/colormatrix``. This parameter (as well as
     similar ones) can be overridden with the ``format`` video filter.
@@ -1343,41 +1310,8 @@ Property list
 ``colormatrix-input-range`` (R)
     See ``colormatrix``.
 
-``video-output-levels`` (RW)
-    See ``--video-output-levels``,
-
 ``colormatrix-primaries`` (R)
     See ``colormatrix``.
-
-``taskbar-progress`` (RW)
-    See ``--taskbar-progress``.
-
-``ontop`` (RW)
-    See ``--ontop``.
-
-``border`` (RW)
-    See ``--border``.
-
-``on-all-workspaces`` (RW)
-    See ``--on-all-workspaces``. Unsetting may not work on all WMs.
-
-``framedrop`` (RW)
-    See ``--framedrop``.
-
-``gamma`` (RW)
-    See ``--gamma``.
-
-``brightness`` (RW)
-    See ``--brightness``.
-
-``contrast`` (RW)
-    See ``--contrast``.
-
-``saturation`` (RW)
-    See ``--saturation``.
-
-``hue`` (RW)
-    See ``--hue``.
 
 ``hwdec`` (RW)
     Reflects the ``--hwdec`` option.
@@ -1388,7 +1322,7 @@ Property list
     properties to see whether this was successful.
 
     Unlike in mpv 0.9.x and before, this does not return the currently active
-    hardware decoder. Since mpv 0.17.1, ``hwdec-current`` is available for
+    hardware decoder. Since mpv 0.18.0, ``hwdec-current`` is available for
     this purpose.
 
 ``hwdec-current``
@@ -1401,8 +1335,8 @@ Property list
     This is known only once the VO has opened (and possibly later). With some
     VOs (like ``opengl``), this might be never known in advance, but only when
     the decoder attempted to create the hw decoder successfully. (Using
-    ``--hwdec-preload`` can load it eagerly.) If there are multiple drivers
-    loaded, they will be separated by ``,``.
+    ``--opengl-hwdec-interop`` can load it eagerly.) If there are multiple
+    drivers loaded, they will be separated by ``,``.
 
     If no VO is active or no interop driver is known, this property is
     unavailable.
@@ -1411,26 +1345,8 @@ Property list
     multiple interop drivers for the same hardware decoder, depending on
     platform and VO.
 
-``hwdec-active``
-    Deprecated. To be removed in mpv 0.19.0. Use ``hwdec-current`` instead.
-
-    Return ``yes`` or ``no``, depending on whether any type of hardware decoding
-    is actually in use.
-
-``hwdec-detected``
-    Deprecated. To be removed in mpv 0.19.0.
-
-    If hardware decoding is active, this returns the hardware decoder in use.
-    Otherwise, it returns either ``no``, or if applicable, the currently loaded
-    hardware decoding API. This is known only once the VO has opened (and
-    possibly later). With some VOs (like ``opengl``), this is never known in
-    advance, but only when the decoder attempted to create the hw decoder
-    successfully. Also, hw decoders with ``-copy`` suffix will return ``no``
-    while no video is being decoded. All this reflects how detecting hw decoders
-    are detected and used internally in mpv.
-
-``panscan`` (RW)
-    See ``--panscan``.
+    This is somewhat similar to the ``--opengl-hwdec-interop`` option, but
+    it returns the actually loaded backend, not the value of this option.
 
 ``video-format``
     Video format as string.
@@ -1485,6 +1401,12 @@ Property list
     ``video-params/gamma``
         The gamma function in use as string. (Exact values subject to change.)
 
+    ``video-params/nom-peak``
+        The video encoding's nominal peak brightness as float.
+
+    ``video-params/sig-peak``
+        The video file's tagged signal peak as float.
+
     ``video-params/chroma-location``
         Chroma location as string. (Exact values subject to change.)
 
@@ -1511,6 +1433,9 @@ Property list
             "colormatrix"       MPV_FORMAT_STRING
             "colorlevels"       MPV_FORMAT_STRING
             "primaries"         MPV_FORMAT_STRING
+            "gamma"             MPV_FORMAT_STRING
+            "nom-peak"          MPV_FORMAT_DOUBLE
+            "sig-peak"          MPV_FORMAT_DOUBLE
             "chroma-location"   MPV_FORMAT_STRING
             "rotate"            MPV_FORMAT_INT64
             "stereo-in"         MPV_FORMAT_STRING
@@ -1522,6 +1447,9 @@ Property list
 
     These have the same values as ``video-out-params/dw`` and
     ``video-out-params/dh``.
+
+``video-dec-params``
+    Exactly like ``video-params``, but no overrides applied.
 
 ``video-out-params``
     Same as ``video-params``, but after video filters have been applied. If
@@ -1545,9 +1473,11 @@ Property list
     ``video-frame-info/tff``
     ``video-frame-info/repeat``
 
-``fps``
+``container-fps``
     Container FPS. This can easily contain bogus values. For videos that use
     modern container formats or video codecs, this will often be incorrect.
+
+    (Renamed from ``fps``.)
 
 ``estimated-vf-fps``
     Estimated/measured FPS of the video filter chain output. (If no filters
@@ -1569,7 +1499,10 @@ Property list
 
 ``display-names``
     Names of the displays that the mpv window covers. On X11, these
-    are the xrandr names (LVDS1, HDMI1, DP1, VGA1, etc.).
+    are the xrandr names (LVDS1, HDMI1, DP1, VGA1, etc.). On Windows, these
+    are the GDI names (\\.\DISPLAY1, \\.\DISPLAY2, etc.) and the first display
+    in the list will be the one that Windows considers associated with the
+    window (as determined by the MonitorFromWindow API.)
 
 ``display-fps`` (RW)
     The refresh rate of the current display. Currently, this is the lowest FPS
@@ -1589,83 +1522,35 @@ Property list
 ``video-aspect`` (RW)
     Video aspect, see ``--video-aspect``.
 
+    If video is active, this reports the effective aspect value, instead of
+    the value of the ``--video-aspect`` option.
+
 ``osd-width``, ``osd-height``
     Last known OSD width (can be 0). This is needed if you want to use the
-    ``overlay_add`` command. It gives you the actual OSD size, which can be
+    ``overlay-add`` command. It gives you the actual OSD size, which can be
     different from the window size in some cases.
 
 ``osd-par``
     Last known OSD display pixel aspect (can be 0).
-
-``vid`` (RW)
-    Current video track (similar to ``--vid``).
-
-``video`` (RW)
-    Alias for ``vid``.
-
-``video-align-x``, ``video-align-y`` (RW)
-    See ``--video-align-x`` and ``--video-align-y``.
-
-``video-pan-x``, ``video-pan-y`` (RW)
-    See ``--video-pan-x`` and ``--video-pan-y``.
-
-``video-zoom`` (RW)
-    See ``--video-zoom``.
-
-``video-unscaled`` (W)
-    See ``--video-unscaled``.
 
 ``program`` (W)
     Switch TS program (write-only).
 
 ``dvb-channel`` (W)
     Pair of integers: card,channel of current DVB stream.
-    Can be switched to switch to another channel on the same card. 
+    Can be switched to switch to another channel on the same card.
 
 ``dvb-channel-name`` (RW)
     Name of current DVB program.
     On write, a channel-switch to the named channel on the same
-    card is performed. Can also be used for channel switching. 
+    card is performed. Can also be used for channel switching.
 
-``sid`` (RW)
-    Current subtitle track (similar to ``--sid``).
+``sub-text``
+    Return the current subtitle text. Formatting is stripped. If a subtitle
+    is selected, but no text is currently visible, or the subtitle is not
+    text-based (i.e. DVD/BD subtitles), an empty string is returned.
 
-``secondary-sid`` (RW)
-    Secondary subtitle track (see ``--secondary-sid``).
-
-``sub`` (RW)
-    Alias for ``sid``.
-
-``sub-delay`` (RW)
-    See ``--sub-delay``.
-
-``sub-pos`` (RW)
-    See ``--sub-pos``.
-
-``sub-visibility`` (RW)
-    See ``--sub-visibility``.
-
-``sub-forced-only`` (RW)
-    See ``--sub-forced-only``.
-
-``sub-scale`` (RW)
-    Subtitle font size multiplier.
-
-``ass-force-margins`` (RW)
-    See ``--ass-force-margins``.
-
-``sub-use-margins`` (RW)
-    See ``--sub-use-margins``.
-
-``ass-vsfilter-aspect-compat`` (RW)
-    See ``--ass-vsfilter-aspect-compat``.
-
-``ass-style-override`` (RW)
-    See ``--ass-style-override``.
-
-``stream-capture`` (RW)
-    A filename, see ``--stream-capture``. Setting this will start capture using
-    the given filename. Setting it to an empty string will stop it.
+    This property is experimental and might be removed in the future.
 
 ``tv-brightness``, ``tv-contrast``, ``tv-saturation``, ``tv-hue`` (RW)
     TV stuff.
@@ -1802,6 +1687,16 @@ Property list
     ``track-list/N/audio-channels`` (deprecated)
         Deprecated alias for ``track-list/N/demux-channel-count``.
 
+    ``track-list/N/replaygain-track-peak``, ``track-list/N/replaygain-track-gain``
+        Per-track replaygain values. Only available for audio tracks with
+        corresponding information stored in the source file.
+
+    ``track-list/N/replaygain-album-peak``, ``track-list/N/replaygain-album-gain``
+        Per-album replaygain values. If the file has per-track but no per-album
+        information, the per-album values will be copied from the per-track
+        values currently. It's possible that future mpv versions will make
+        these properties unavailable instead in this case.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -1831,6 +1726,10 @@ Property list
                 "demux-samplerate"  MPV_FORMAT_INT64
                 "demux-fps"         MPV_FORMAT_DOUBLE
                 "audio-channels"    MPV_FORMAT_INT64
+                "replaygain-track-peak" MPV_FORMAT_DOUBLE
+                "replaygain-track-gain" MPV_FORMAT_DOUBLE
+                "replaygain-album-peak" MPV_FORMAT_DOUBLE
+                "replaygain-album-gain" MPV_FORMAT_DOUBLE
 
 ``chapter-list``
     List of chapters, current entry marked. Currently, the raw property value
@@ -1859,11 +1758,8 @@ Property list
                 "title" MPV_FORMAT_STRING
                 "time"  MPV_FORMAT_DOUBLE
 
-``af`` (RW)
-    See ``--af`` and the ``af`` command.
-
-``vf`` (RW)
-    See ``--vf`` and the ``vf`` command.
+``af``, ``vf`` (RW)
+    See ``--vf``/``--af`` and the ``vf``/``af`` command.
 
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
@@ -1880,12 +1776,6 @@ Property list
                     "value" MPV_FORMAT_STRING
 
     It's also possible to write the property using this format.
-
-``video-rotate`` (RW)
-    See ``--video-rotate`` option.
-
-``video-stereo-mode`` (RW)
-    See ``--video-stereo-mode`` option.
 
 ``seekable``
     Return whether it's generally possible to seek in the current file.
@@ -1937,6 +1827,44 @@ Property list
     whether the video window is visible. If the ``--force-window`` option is
     used, this is usually always returns ``yes``.
 
+``vo-performance``
+    Some video output performance metrics. Not implemented by all VOs. This has
+    a number of sup-properties, of the form ``vo-performance/<metric>-<value>``,
+    all of them in milliseconds.
+
+    ``<metric>`` refers to one of:
+
+    ``upload``
+        Time needed to make the frame available to the GPU (if necessary).
+    ``render``
+        Time needed to perform all necessary video postprocessing and rendering
+        passes (if necessary).
+    ``present``
+        Time needed to present a rendered frame on-screen.
+
+    When a step is unnecessary or skipped, it will have the value 0.
+
+    ``<value>`` refers to one of:
+
+    ``last``
+        Last measured value.
+    ``avg``
+        Average over a fixed number of past samples. (The exact timeframe
+        varies, but it should generally be a handful of seconds)
+    ``peak``
+        The peak (highest value) within this averaging range.
+
+    When querying the property with the client API using ``MPV_FORMAT_NODE``,
+    or with Lua ``mp.get_property_native``, this will return a mpv_node with
+    the following contents:
+
+    ::
+
+        MPV_FORMAT_NODE_MAP
+            "<metric>-<value>"  MPV_FORMAT_INT64
+
+    (One entry for each ``<metric>`` and ``<value>`` combination)
+
 ``video-bitrate``, ``audio-bitrate``, ``sub-bitrate``
     Bitrate values calculated on the packet level. This works by dividing the
     bit size of all packets between two keyframes by their presentation
@@ -1987,8 +1915,9 @@ Property list
 
     The ``name`` is what is to be passed to the ``--audio-device`` option (and
     often a rather cryptic audio API-specific ID), while ``description`` is
-    human readable free form text. The description is an empty string if none
-    was received.
+    human readable free form text. The description is set to the device name
+    (minus mpv-specific ``<driver>/`` prefix) if no description is available
+    or the description would have been an empty string.
 
     The special entry with the name set to ``auto`` selects the default audio
     output driver and the default device.
@@ -2088,6 +2017,10 @@ Property list
     require reloading the file for changes to take effect. If there is an
     equivalent property, prefer setting the property instead.
 
+    There shouldn't be any reason to access ``options/<name>`` instead of
+    ``<name>``, except in situations in which the properties have different
+    behavior or conflicting semantics.
+
 ``file-local-options/<name>``
     Similar to ``options/<name>``, but when setting an option through this
     property, the option is reset to its old value once the current file has
@@ -2096,7 +2029,7 @@ Property list
 
     (Note that if an option is marked as file-local, even ``options/`` will
     access the local value, and the ``old`` value, which will be restored on
-    end of playback, can not be read or written until end of playback.)
+    end of playback, cannot be read or written until end of playback.)
 
 ``option-info/<name>``
     Additional per-option information.
@@ -2140,6 +2073,86 @@ Property list
 
 ``property-list``
     Return the list of top-level properties.
+
+``profile-list``
+    Return the list of profiles and their contents. This is highly
+    implementation-specific, and may change any time. Currently, it returns
+    an array of options for each profile. Each option has a name and a value,
+    with the value currently always being a string. Note that the options array
+    is not a map, as order matters and duplicate entries are possible. Recursive
+    profiles are not expanded, and show up as special ``profile`` options.
+
+Inconsistencies between options and properties
+----------------------------------------------
+
+You can access (almost) all options as properties, though there are some
+caveats with some properties (due to historical reasons):
+
+``vid``, ``aid``, ``sid``
+    While playback is active, you can set existing tracks only. (The option
+    allows setting any track ID, and which tracks to enable is chosen at
+    loading time.)
+
+    Option changes at runtime are affected by this as well.
+
+``deinterlace``
+    While video is active, this behaves differently from the option. It will
+    never return the ``auto`` value (but the state as observed by the video
+    chain). If you set ``auto``, the property will set this as the option value,
+    and will return the actual video chain state as observed instead of auto.
+
+``video-aspect``
+    While video is active, always returns the effective aspect ratio. Setting
+    a special value (like ``no``, values ``<= 0``) will make the property
+    set this as option, and return whatever actual aspect was derived from the
+    option setting.
+
+``brightness`` (and other color options)
+    If ``--vo=xv`` is used, these properties may return the adapter's current
+    values instead of the option values.
+
+``display-fps``
+    If a VO is created, this will return either the actual display FPS, or
+    an invalid value, instead of the option value.
+
+``vf``, ``af``
+    If you set the properties during playback, and the filter chain fails to
+    reinitialize, the new value will be rejected. Setting the option or
+    setting the property outside of playback will always succeed/fail in the
+    same way. Also, there are no ``vf-add`` etc. properties, but you can use
+    the ``vf``/``af`` group of commands to achieve the same.
+
+    Option changes at runtime are affected by this as well.
+
+``edition``
+    While a file is loaded, the property will always return the effective
+    edition, and setting the ``auto`` value will show somewhat strange behavior
+    (the property eventually switching to whatever is the default edition).
+
+``playlist``
+    The property is read-only and returns the current internal playlist. The
+    option is for loading playlist during command line parsing. For client API
+    uses, you should use the ``loadlist`` command instead.
+
+``window-scale``
+    Might verify the set value when setting while a window is created.
+
+``audio-file``, ``sub-file``, ``external-file``
+    These options/properties are actually lists of filenames. To make the
+    command-line interface easier, each ``--audio-file=...`` option appends
+    the full string to the internal list. However, when used as properties,
+    every time you set the property as a string the internal list will be
+    replaced with a single entry containing the string you set. ``,`` or other
+    separators are never used. You have to use ``MPV_FORMAT_NODE_ARRAY`` (or
+    corresponding API, e.g. ``mp.set_property_native()`` with a table in Lua)
+    to set multiple entries.
+
+    Strictly speaking, option access via API (e.g. ``mpv_set_option_string()``)
+    has the same problem, and it's only a difference between CLI/API.
+
+``playlist-pos``, ``chapter``
+    These properties behave different from the deprecated options with the same
+    names.
 
 Property Expansion
 ------------------

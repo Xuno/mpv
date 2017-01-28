@@ -90,7 +90,6 @@ void osd_destroy_backend(struct osd_state *osd)
     for (int n = 0; n < MAX_OSD_PARTS; n++) {
         struct osd_object *obj = osd->objs[n];
         destroy_ass_renderer(&obj->ass);
-        talloc_free(obj->parts_cache.parts);
         for (int i = 0; i < obj->num_externals; i++)
             destroy_external(&obj->externals[i]);
         obj->num_externals = 0;
@@ -220,12 +219,9 @@ static ASS_Event *add_osd_ass_event_escaped(ASS_Track *track, const char *style,
     return e;
 }
 
-static void update_osd_text(struct osd_state *osd, struct osd_object *obj)
+static ASS_Style *prepare_osd_ass(struct osd_state *osd, struct osd_object *obj)
 {
     struct MPOpts *opts = osd->opts;
-
-    if (!obj->text[0])
-        return;
 
     create_ass_track(osd, obj, &obj->ass, 0, 0);
 
@@ -237,8 +233,29 @@ static void update_osd_text(struct osd_state *osd, struct osd_object *obj)
     if (!opts->osd_scale_by_window)
         playresy *= 720.0 / obj->vo_res.h;
 
-    mp_ass_set_style(get_style(&obj->ass, "OSD"), playresy, &font);
+    ASS_Style *style = get_style(&obj->ass, "OSD");
+    mp_ass_set_style(style, playresy, &font);
+    return style;
+}
+
+static void update_osd_text(struct osd_state *osd, struct osd_object *obj)
+{
+
+    if (!obj->text[0])
+        return;
+
+    prepare_osd_ass(osd, obj);
     add_osd_ass_event_escaped(obj->ass.track, "OSD", obj->text);
+}
+
+void osd_get_text_size(struct osd_state *osd, int *out_screen_h, int *out_font_h)
+{
+    pthread_mutex_lock(&osd->lock);
+    struct osd_object *obj = osd->objs[OSDTYPE_OSD];
+    ASS_Style *style = prepare_osd_ass(osd, obj);
+    *out_screen_h = obj->ass.track->PlayResY - style->MarginV;
+    *out_font_h = style->FontSize;
+    pthread_mutex_unlock(&osd->lock);
 }
 
 // align: -1 .. +1
@@ -432,6 +449,7 @@ static void update_progbar(struct osd_state *osd, struct osd_object *obj)
 
 static void update_osd(struct osd_state *osd, struct osd_object *obj)
 {
+    obj->osd_changed = false;
     clear_ass(&obj->ass);
     update_osd_text(osd, obj);
     update_progbar(osd, obj);
@@ -490,6 +508,8 @@ void osd_set_external(struct osd_state *osd, void *id, int res_x, int res_y,
         int index = entry - &obj->externals[0];
         destroy_external(entry);
         MP_TARRAY_REMOVE_AT(obj->externals, obj->num_externals, index);
+        obj->changed = true;
+        osd->want_redraw_notification = true;
         goto done;
     }
 
@@ -501,8 +521,8 @@ void osd_set_external(struct osd_state *osd, void *id, int res_x, int res_y,
         entry->res_x = res_x;
         entry->res_y = res_y;
         update_external(osd, obj, entry);
-        obj->parts_cache.change_id = 1;
-        osd_changed_unlocked(osd, obj->type);
+        obj->changed = true;
+        osd->want_redraw_notification = true;
     }
 
 done:
@@ -510,28 +530,40 @@ done:
 }
 
 static void append_ass(struct ass_state *ass, struct mp_osd_res *res,
-                       struct sub_bitmaps *imgs)
+                       ASS_Image **img_list, bool *changed)
 {
-    if (!ass->render || !ass->track)
+    if (!ass->render || !ass->track) {
+        *img_list = NULL;
         return;
+    }
 
     ass_set_frame_size(ass->render, res->w, res->h);
     ass_set_aspect_ratio(ass->render, res->display_par, 1.0);
-    mp_ass_render_frame(ass->render, ass->track, 0, imgs);
+
+    int ass_changed;
+    *img_list = ass_render_frame(ass->render, ass->track, 0, &ass_changed);
+    *changed |= ass_changed;
 }
 
 void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
-                            struct sub_bitmaps *out_imgs)
+                            int format, struct sub_bitmaps *out_imgs)
 {
-    if (obj->force_redraw && obj->type == OSDTYPE_OSD)
+    if (obj->type == OSDTYPE_OSD && obj->osd_changed)
         update_osd(osd, obj);
 
-    append_ass(&obj->ass, &obj->vo_res, &obj->parts_cache);
-    for (int n = 0; n < obj->num_externals; n++)
-        append_ass(&obj->externals[n].ass, &obj->vo_res, &obj->parts_cache);
+    if (!obj->ass_packer)
+        obj->ass_packer = mp_ass_packer_alloc(obj);
 
-    *out_imgs = obj->parts_cache;
+    MP_TARRAY_GROW(obj, obj->ass_imgs, obj->num_externals + 1);
 
-    obj->parts_cache.change_id = 0;
-    obj->parts_cache.num_parts = 0;
+    append_ass(&obj->ass, &obj->vo_res, &obj->ass_imgs[0], &obj->changed);
+    for (int n = 0; n < obj->num_externals; n++) {
+        append_ass(&obj->externals[n].ass, &obj->vo_res, &obj->ass_imgs[n + 1],
+                   &obj->changed);
+    }
+
+    mp_ass_packer_pack(obj->ass_packer, obj->ass_imgs, obj->num_externals + 1,
+                       obj->changed, format, out_imgs);
+
+    obj->changed = false;
 }

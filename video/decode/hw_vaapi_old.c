@@ -52,10 +52,8 @@
 struct priv {
     struct mp_log *log;
     struct mp_vaapi_ctx *ctx;
+    bool own_ctx;
     VADisplay display;
-
-    const struct va_native_display *native_display_fns;
-    void *native_display;
 
     // libavcodec shared struct
     struct vaapi_context *va_context;
@@ -65,45 +63,6 @@ struct priv {
     int rt_format;
 
     struct mp_image_pool *sw_pool;
-};
-
-struct va_native_display {
-    void (*create)(struct priv *p);
-    void (*destroy)(struct priv *p);
-};
-
-#if HAVE_VAAPI_X11
-#include <X11/Xlib.h>
-#include <va/va_x11.h>
-
-static void x11_destroy(struct priv *p)
-{
-    if (p->native_display)
-        XCloseDisplay(p->native_display);
-    p->native_display = NULL;
-}
-
-static void x11_create(struct priv *p)
-{
-    p->native_display = XOpenDisplay(NULL);
-    if (!p->native_display)
-        return;
-    p->display = vaGetDisplay(p->native_display);
-    if (!p->display)
-        x11_destroy(p);
-}
-
-static const struct va_native_display disp_x11 = {
-    .create = x11_create,
-    .destroy = x11_destroy,
-};
-#endif
-
-static const struct va_native_display *const native_displays[] = {
-#if HAVE_VAAPI_X11
-    &disp_x11,
-#endif
-    NULL
 };
 
 #define HAS_HEVC VA_CHECK_VERSION(0, 38, 0)
@@ -344,40 +303,6 @@ static struct mp_image *update_format(struct lavc_ctx *ctx, struct mp_image *img
     return img;
 }
 
-static void destroy_va_dummy_ctx(struct priv *p)
-{
-    va_destroy(p->ctx);
-    p->ctx = NULL;
-    p->display = NULL;
-    if (p->native_display_fns)
-        p->native_display_fns->destroy(p);
-}
-
-// Creates a "private" VADisplay, disconnected from the VO. We just create a
-// new X connection, because that's simpler. (We could also pass the X
-// connection along with struct mp_hwdec_devices, if we wanted.)
-static bool create_va_dummy_ctx(struct priv *p)
-{
-    for (int n = 0; native_displays[n]; n++) {
-        native_displays[n]->create(p);
-        if (p->display) {
-            p->native_display_fns = native_displays[n];
-            break;
-        }
-    }
-    if (!p->display)
-        goto destroy_ctx;
-    p->ctx = va_initialize(p->display, p->log, true);
-    if (!p->ctx) {
-        vaTerminate(p->display);
-        goto destroy_ctx;
-    }
-    return true;
-destroy_ctx:
-    destroy_va_dummy_ctx(p);
-    return false;
-}
-
 static void uninit(struct lavc_ctx *ctx)
 {
     struct priv *p = ctx->hwdec_priv;
@@ -390,8 +315,8 @@ static void uninit(struct lavc_ctx *ctx)
     talloc_free(p->pool);
     p->pool = NULL;
 
-    if (p->native_display_fns)
-        destroy_va_dummy_ctx(p);
+    if (p->own_ctx)
+        va_destroy(p->ctx);
 
     talloc_free(p);
     ctx->hwdec_priv = NULL;
@@ -409,11 +334,12 @@ static int init(struct lavc_ctx *ctx, bool direct)
     if (direct) {
         p->ctx = hwdec_devices_get(ctx->hwdec_devs, HWDEC_VAAPI)->ctx;
     } else {
-        create_va_dummy_ctx(p);
+        p->ctx = va_create_standalone(ctx->log, false);
         if (!p->ctx) {
             talloc_free(p);
             return -1;
         }
+        p->own_ctx = true;
     }
 
     p->display = p->ctx->display;
@@ -449,11 +375,11 @@ static int probe(struct lavc_ctx *ctx, struct vd_lavc_hwdec *hwdec,
 static int probe_copy(struct lavc_ctx *ctx, struct vd_lavc_hwdec *hwdec,
                       const char *codec)
 {
-    struct priv dummy = {mp_null_log};
-    if (!create_va_dummy_ctx(&dummy))
+    struct mp_vaapi_ctx *dummy = va_create_standalone(ctx->log, true);
+    if (!dummy)
         return HWDEC_ERR_NO_CTX;
-    bool emulated = va_guess_if_emulated(dummy.ctx);
-    destroy_va_dummy_ctx(&dummy);
+    bool emulated = va_guess_if_emulated(dummy);
+    va_destroy(dummy);
     if (!hwdec_check_codec_support(codec, profiles))
         return HWDEC_ERR_NO_CODEC;
     if (emulated)

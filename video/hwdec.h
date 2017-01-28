@@ -11,7 +11,9 @@ enum hwdec_type {
     HWDEC_AUTO,
     HWDEC_AUTO_COPY,
     HWDEC_VDPAU,
+    HWDEC_VDPAU_COPY,
     HWDEC_VIDEOTOOLBOX,
+    HWDEC_VIDEOTOOLBOX_COPY,
     HWDEC_VAAPI,
     HWDEC_VAAPI_COPY,
     HWDEC_DXVA2,
@@ -19,7 +21,11 @@ enum hwdec_type {
     HWDEC_D3D11VA,
     HWDEC_D3D11VA_COPY,
     HWDEC_RPI,
+    HWDEC_RPI_COPY,
     HWDEC_MEDIACODEC,
+    HWDEC_CUDA,
+    HWDEC_CUDA_COPY,
+    HWDEC_CRYSTALHD,
 };
 
 #define HWDEC_IS_AUTO(x) ((x) == HWDEC_AUTO || (x) == HWDEC_AUTO_COPY)
@@ -38,9 +44,17 @@ struct mp_hwdec_ctx {
     //  HWDEC_D3D11VA:          ID3D11Device*
     //  HWDEC_DXVA2:            IDirect3DDevice9*
     //  HWDEC_DXVA2_COPY:       IDirect3DDevice9*
+    //  HWDEC_CUDA:             CUcontext*
     void *ctx;
 
-    // Optional.
+    // libavutil-wrapped context, if available.
+    struct AVBufferRef *av_device_ref; // AVVAAPIDeviceContext*
+
+    // List of IMGFMT_s, terminated with 0. NULL if N/A.
+    int *supported_formats;
+
+    // Optional. Legacy. (New code should use AVHWFramesContext and
+    // mp_image_hw_download().)
     // Allocates a software image from the pool, downloads the hw image from
     // mpi, and returns it.
     // pool can be NULL (then just use straight allocation).

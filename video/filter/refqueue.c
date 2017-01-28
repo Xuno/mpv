@@ -47,6 +47,7 @@ struct mp_refqueue *mp_refqueue_alloc(void)
 
 void mp_refqueue_free(struct mp_refqueue *q)
 {
+    mp_refqueue_flush(q);
     talloc_free(q);
 }
 
@@ -72,15 +73,6 @@ bool mp_refqueue_should_deint(struct mp_refqueue *q)
 
     return (q->queue[q->pos]->fields & MP_IMGFIELD_INTERLACED) ||
            !(q->flags & MP_MODE_INTERLACED_ONLY);
-}
-
-// Whether the current output frame is marked as interlaced.
-bool mp_refqueue_is_interlaced(struct mp_refqueue *q)
-{
-    if (!mp_refqueue_has_output(q))
-        return false;
-
-    return q->queue[q->pos]->fields & MP_IMGFIELD_INTERLACED;
 }
 
 // Whether the current output frame (field) is the top field, bottom field

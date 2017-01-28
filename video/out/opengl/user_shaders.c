@@ -16,6 +16,7 @@
  */
 
 #include <ctype.h>
+#include <assert.h>
 
 #include "user_shaders.h"
 
@@ -50,6 +51,9 @@ static bool parse_rpn_szexpr(struct bstr line, struct szexp out[MAX_SZEXP_SIZE])
         case '-': exp->tag = SZEXP_OP2; exp->val.op = SZEXP_OP_SUB; continue;
         case '*': exp->tag = SZEXP_OP2; exp->val.op = SZEXP_OP_MUL; continue;
         case '/': exp->tag = SZEXP_OP2; exp->val.op = SZEXP_OP_DIV; continue;
+        case '!': exp->tag = SZEXP_OP1; exp->val.op = SZEXP_OP_NOT; continue;
+        case '>': exp->tag = SZEXP_OP2; exp->val.op = SZEXP_OP_GT;  continue;
+        case '<': exp->tag = SZEXP_OP2; exp->val.op = SZEXP_OP_LT;  continue;
         }
 
         if (isdigit(word.start[0])) {
@@ -66,6 +70,94 @@ static bool parse_rpn_szexpr(struct bstr line, struct szexp out[MAX_SZEXP_SIZE])
     return true;
 }
 
+// Returns whether successful. 'result' is left untouched on failure
+bool eval_szexpr(struct mp_log *log, void *priv,
+                 bool (*lookup)(void *priv, struct bstr var, float size[2]),
+                 struct szexp expr[MAX_SZEXP_SIZE], float *result)
+{
+    float stack[MAX_SZEXP_SIZE] = {0};
+    int idx = 0; // points to next element to push
+
+    for (int i = 0; i < MAX_SZEXP_SIZE; i++) {
+        switch (expr[i].tag) {
+        case SZEXP_END:
+            goto done;
+
+        case SZEXP_CONST:
+            // Since our SZEXPs are bound by MAX_SZEXP_SIZE, it should be
+            // impossible to overflow the stack
+            assert(idx < MAX_SZEXP_SIZE);
+            stack[idx++] = expr[i].val.cval;
+            continue;
+
+        case SZEXP_OP1:
+            if (idx < 1) {
+                mp_warn(log, "Stack underflow in RPN expression!\n");
+                return false;
+            }
+
+            switch (expr[i].val.op) {
+            case SZEXP_OP_NOT: stack[idx-1] = !stack[idx-1]; break;
+            default: abort();
+            }
+            continue;
+
+        case SZEXP_OP2:
+            if (idx < 2) {
+                mp_warn(log, "Stack underflow in RPN expression!\n");
+                return false;
+            }
+
+            // Pop the operands in reverse order
+            float op2 = stack[--idx];
+            float op1 = stack[--idx];
+            float res = 0.0;
+            switch (expr[i].val.op) {
+            case SZEXP_OP_ADD: res = op1 + op2; break;
+            case SZEXP_OP_SUB: res = op1 - op2; break;
+            case SZEXP_OP_MUL: res = op1 * op2; break;
+            case SZEXP_OP_DIV: res = op1 / op2; break;
+            case SZEXP_OP_GT:  res = op1 > op2; break;
+            case SZEXP_OP_LT:  res = op1 < op2; break;
+            default: abort();
+            }
+
+            if (!isfinite(res)) {
+                mp_warn(log, "Illegal operation in RPN expression!\n");
+                return false;
+            }
+
+            stack[idx++] = res;
+            continue;
+
+        case SZEXP_VAR_W:
+        case SZEXP_VAR_H: {
+            struct bstr name = expr[i].val.varname;
+            float size[2];
+
+            if (!lookup(priv, name, size)) {
+                mp_warn(log, "Variable %.*s not found in RPN expression!\n",
+                        BSTR_P(name));
+                return false;
+            }
+
+            stack[idx++] = (expr[i].tag == SZEXP_VAR_W) ? size[0] : size[1];
+            continue;
+            }
+        }
+    }
+
+done:
+    // Return the single stack element
+    if (idx != 1) {
+        mp_warn(log, "Malformed stack after RPN expression!\n");
+        return false;
+    }
+
+    *result = stack[0];
+    return true;
+}
+
 // Returns false if no more shaders could be parsed
 bool parse_user_shader_pass(struct mp_log *log, struct bstr *body,
                             struct gl_user_shader *out)
@@ -77,6 +169,7 @@ bool parse_user_shader_pass(struct mp_log *log, struct bstr *body,
         .offset = identity_trans,
         .width = {{ SZEXP_VAR_W, { .varname = bstr0("HOOKED") }}},
         .height = {{ SZEXP_VAR_H, { .varname = bstr0("HOOKED") }}},
+        .cond = {{ SZEXP_CONST, { .cval = 1.0 }}},
     };
 
     int hook_idx = 0;
@@ -149,6 +242,14 @@ bool parse_user_shader_pass(struct mp_log *log, struct bstr *body,
         if (bstr_eatstart0(&line, "HEIGHT")) {
             if (!parse_rpn_szexpr(line, out->height)) {
                 mp_err(log, "Error while parsing HEIGHT!\n");
+                return false;
+            }
+            continue;
+        }
+
+        if (bstr_eatstart0(&line, "WHEN")) {
+            if (!parse_rpn_szexpr(line, out->cond)) {
+                mp_err(log, "Error while parsing WHEN!\n");
                 return false;
             }
             continue;

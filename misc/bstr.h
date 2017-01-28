@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef MPLAYER_BSTR_H
@@ -116,7 +116,7 @@ int bstr_validate_utf8(struct bstr s);
 // talloc, with talloc_ctx as parent.
 struct bstr bstr_sanitize_utf8_latin1(void *talloc_ctx, struct bstr s);
 
-// Return the text before the occurance of a character, and return it. Change
+// Return the text before the occurrence of a character, and return it. Change
 // *rest to point to the text following this character. (rest can be NULL.)
 struct bstr bstr_splitchar(struct bstr str, struct bstr *rest, const char c);
 

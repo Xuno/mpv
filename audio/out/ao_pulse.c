@@ -23,6 +23,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 #include <pthread.h>
 
 #include <pulse/pulseaudio.h>
@@ -34,8 +35,8 @@
 #include "ao.h"
 #include "internal.h"
 
-#define VOL_PA2MP(v) ((v) * 100 / PA_VOLUME_NORM)
-#define VOL_MP2PA(v) ((v) * PA_VOLUME_NORM / 100)
+#define VOL_PA2MP(v) ((v) * 100.0 / PA_VOLUME_NORM)
+#define VOL_MP2PA(v) lrint((v) * PA_VOLUME_NORM / 100)
 
 struct priv {
     // PulseAudio playback stream object
@@ -835,9 +836,10 @@ const struct ao_driver audio_out_pulse = {
     },
     .options = (const struct m_option[]) {
         OPT_STRING("host", cfg_host, 0),
-        OPT_STRING("sink", cfg_sink, 0),
+        OPT_STRING("sink", cfg_sink, 0, DEVICE_OPT_DEPRECATION),
         OPT_CHOICE_OR_INT("buffer", cfg_buffer, 0, 1, 2000, ({"native", 0})),
         OPT_FLAG("latency-hacks", cfg_latency_hacks, 0),
         {0}
     },
+    .options_prefix = "pulse",
 };

@@ -117,14 +117,17 @@ extern "C" {
  *
  * While "normal" mpv loads the OpenGL hardware decoding interop on demand,
  * this can't be done with opengl_cb for internal technical reasons. Instead,
- * make it load the interop at load time by setting the "hwdec-preload"="auto"
- * option before calling mpv_opengl_cb_init_gl().
+ * make it load the interop at load time by setting the
+ * "opengl-hwdec-interop"="auto" option before calling mpv_opengl_cb_init_gl()
+ * ("hwdec-preload" in older mpv releases).
  *
  * There may be certain requirements on the OpenGL implementation:
  * - Windows: ANGLE is required (although in theory GL/DX interop could be used)
  * - Intel/Linux: EGL is required, and also a glMPGetNativeDisplay() callback
  *                must be provided (see sections below)
- * - nVidia/Linux: GLX is required
+ * - nVidia/Linux: GLX is required (if you force "cuda", it should work on EGL
+ *                 as well, if you have recent enough drivers and the
+ *                 "hwaccel" option is set to "cuda" as well)
  * - OSX: CGL is required (CGLGetCurrentContext() returning non-NULL)
  *
  * Once these things are setup, hardware decoding can be enabled/disabled at
@@ -190,6 +193,29 @@ extern "C" {
  * In previous libmpv releases, this used "GL_MP_D3D_interfaces" and
  * "glMPGetD3DInterface". This is deprecated; use glMPGetNativeDisplay instead
  * (the semantics are 100% compatible).
+ *
+ * Windowing system interop on RPI
+ * -------------------------------
+ *
+ * The RPI uses no proper interop, but hardware overlays instead. To place the
+ * overlay correctly, you can communicate the window parameters as follows to
+ * libmpv. gl->MPGetNativeDisplay("MPV_RPI_WINDOW") return an array of type int
+ * with the following 4 elements:
+ *      0: display number (default 0)
+ *      1: layer number of the GL layer - video will be placed in the layer
+ *         directly below (default: 0)
+ *      2: absolute x position of the GL context (default: 0)
+ *      3: absolute y position of the GL context (default: 0)
+ * The (x,y) position must be the absolute screen pixel position of the
+ * top/left pixel of the dispmanx layer used for the GL context. If you render
+ * to a FBO, the position must be that of the final position of the FBO
+ * contents on screen. You can't transform or scale the video other than what
+ * mpv will render to the video overlay. The defaults are suitable for
+ * rendering the video at fullscreen.
+ * The parameters are checked on every draw by calling MPGetNativeDisplay and
+ * checking the values in the returned array for changes. The returned array
+ * must remain valid until the libmpv render function returns; then it can be
+ * deallocated by the API user.
  */
 
 /**

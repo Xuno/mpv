@@ -29,7 +29,7 @@
 #include <endpointvolume.h>
 
 #include "common/msg.h"
-#include "osdep/atomics.h"
+#include "osdep/atomic.h"
 #include "osdep/windows_utils.h"
 #include "internal.h"
 #include "ao.h"
@@ -49,6 +49,10 @@ void wasapi_change_uninit(struct ao* ao);
               do { if (FAILED(hres)) { goto exit_label; } } while(0)
 #define SAFE_RELEASE(unk, release) \
               do { if ((unk) != NULL) { release; (unk) = NULL; } } while(0)
+
+#define mp_format_res_str(hres) \
+    (SUCCEEDED(hres) ? "ok" : ((hres) == AUDCLNT_E_UNSUPPORTED_FORMAT) \
+     ? "unsupported" : mp_HRESULT_to_str(hres))
 
 enum wasapi_thread_state {
     WASAPI_THREAD_FEED = 0,
@@ -92,8 +96,6 @@ typedef struct wasapi_state {
 
     // ao options
     int opt_exclusive;
-    int opt_list;
-    char *opt_device;
 
     // format info
     WAVEFORMATEXTENSIBLE format;

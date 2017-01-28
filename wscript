@@ -4,17 +4,16 @@ import sys, os, re
 sys.path.insert(0, os.path.join(os.getcwd(), 'waftools'))
 sys.path.insert(0, os.getcwd())
 from waflib.Configure import conf
+from waflib.Tools import c_preproc
 from waflib import Utils
 from waftools.checks.generic import *
 from waftools.checks.custom import *
 
+c_preproc.go_absolute=True # enable system folders
+c_preproc.standard_includes.append('/usr/local/include')
+
 build_options = [
     {
-        'name': '--gpl3',
-        'desc': 'GPL3 license',
-        'default': 'disable',
-        'func': check_true
-    }, {
         'name': '--cplayer',
         'desc': 'mpv CLI player',
         'default': 'enable',
@@ -69,6 +68,12 @@ build_options = [
         'desc': 'dynamic loader',
         'func': check_libs(['dl'], check_statement('dlfcn.h', 'dlopen("", 0)'))
     }, {
+        'name': '--cplugins',
+        'desc': 'C plugins',
+        'deps': [ 'libdl' ],
+        'default': 'disable',
+        'func': check_cc(linkflags=['-Wl,-export-dynamic']),
+    }, {
         'name': 'dlopen',
         'desc': 'dlopen',
         'deps_any': [ 'libdl', 'os-win32', 'os-cygwin' ],
@@ -82,6 +87,7 @@ build_options = [
     }, {
         'name': '--zsh-comp',
         'desc': 'zsh completion',
+        'func': check_ctx_vars('BIN_PERL'),
         'func': check_true,
         'default': 'disable',
     }, {
@@ -120,7 +126,7 @@ main_dependencies = [
         'name': 'mingw',
         'desc': 'MinGW',
         'deps': [ 'os-win32' ],
-        'func': check_statement('stddef.h', 'int x = __MINGW32__;'
+        'func': check_statement('stdlib.h', 'int x = __MINGW32__;'
                                             'int y = __MINGW64_VERSION_MAJOR'),
     }, {
         'name': 'posix',
@@ -140,7 +146,7 @@ main_dependencies = [
         'name': 'win32',
         'desc': 'win32',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
-        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'avrt', 'dwmapi']),
+        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid', 'avrt', 'dwmapi']),
     }, {
         'name': '--win32-internal-pthreads',
         'desc': 'internal pthread wrapper for win32 (Vista+)',
@@ -154,12 +160,16 @@ main_dependencies = [
         'req': True,
         'fmsg': 'Unable to find pthreads support.'
     }, {
+        'name': 'gnuc',
+        'desc': 'GNU C extensions',
+        'func': check_statement([], "__GNUC__"),
+    }, {
         'name': 'stdatomic',
         'desc': 'stdatomic.h',
         'func': check_libs(['atomic'],
             check_statement('stdatomic.h',
                 'atomic_int_least64_t test = ATOMIC_VAR_INIT(123);'
-                'int test2 = atomic_load(&test)'))
+                'atomic_fetch_add(&test, 1)'))
     }, {
         'name': 'atomic-builtins',
         'desc': 'compiler support for __atomic built-ins',
@@ -169,22 +179,19 @@ main_dependencies = [
                 'test = __atomic_add_fetch(&test, 1, __ATOMIC_SEQ_CST)')),
         'deps_neg': [ 'stdatomic' ],
     }, {
-        'name': 'sync-builtins',
-        'desc': 'compiler support for __sync built-ins',
-        'func': check_statement('stdint.h',
-                    'int64_t test = 0;'
-                    '__typeof__(test) x = ({int a = 1; a;});'
-                    'test = __sync_add_and_fetch(&test, 1)'),
-        'deps_neg': [ 'stdatomic', 'atomic-builtins' ],
-    }, {
         'name': 'atomics',
-        'desc': 'compiler support for usable thread synchronization built-ins',
+        'desc': 'stdatomic.h support or emulation',
         'func': check_true,
-        'deps_any': ['stdatomic', 'atomic-builtins', 'sync-builtins'],
+        'req': True,
+        'deps_any': ['stdatomic', 'atomic-builtins', 'gnuc'],
     }, {
         'name': 'c11-tls',
         'desc': 'C11 TLS support',
         'func': check_statement('stddef.h', 'static _Thread_local int x = 0'),
+    }, {
+        'name': 'gcc-tls',
+        'desc': 'GCC TLS support',
+        'func': check_statement('stddef.h', 'static __thread int x = 0'),
     }, {
         'name': 'librt',
         'desc': 'linking with -lrt',
@@ -344,16 +351,6 @@ iconv support use --disable-iconv.",
         'desc': 'cdda support (libcdio)',
         'func': check_pkg_config('libcdio_paranoia'),
     }, {
-        'name': '--enca',
-        'desc': 'ENCA support',
-        'deps': [ 'iconv' ],
-        'func': check_statement('enca.h', 'enca_get_languages(NULL)', lib='enca'),
-    }, {
-        'name': '--libguess',
-        'desc': 'libguess support',
-        'deps': [ 'iconv' ],
-        'func': check_pkg_config('libguess', '>= 1.0'),
-    }, {
         'name': '--uchardet',
         'desc': 'uchardet support',
         'deps': [ 'iconv' ],
@@ -389,139 +386,89 @@ iconv support use --disable-iconv.",
     }
 ]
 
-libav_pkg_config_checks = [
-    'libavutil',   '>= 54.02.0',
-    'libavcodec',  '>= 56.1.0',
-    'libavformat', '>= 56.01.0',
-    'libswscale',  '>= 2.1.3'
+ffmpeg_version = "3.2.2"
+ffmpeg_pkg_config_checks = [
+    'libavutil',     '>= 55.34.100',
+    'libavcodec',    '>= 57.64.100',
+    'libavformat',   '>= 57.56.100',
+    'libswscale',    '>= 4.2.100',
+    'libavfilter',   '>= 6.65.100',
+    'libswresample', '>= 2.3.100',
 ]
-libav_versions_string = "FFmpeg 2.4 or Libav 11"
+libav_version = "12"
+libav_pkg_config_checks = [
+    'libavutil',     '>= 55.20.0',
+    'libavcodec',    '>= 57.25.0',
+    'libavformat',   '>= 57.7.0',
+    'libswscale',    '>= 4.0.0',
+    'libavfilter',   '>= 6.7.0',
+    'libavresample', '>= 3.0.0',
+]
+
+libav_versions_string = "FFmpeg %s or Libav %s" % (ffmpeg_version, libav_version)
+
+def check_ffmpeg_or_libav_versions():
+    def fn(ctx, dependency_identifier, **kw):
+        versions = ffmpeg_pkg_config_checks
+        if ctx.dependency_satisfied('is_libav'):
+            versions = libav_pkg_config_checks
+        return check_pkg_config(*versions)(ctx, dependency_identifier, **kw)
+    return fn
 
 libav_dependencies = [
     {
+        'name': 'libavcodec',
+        'desc': 'FFmpeg/Libav present',
+        'func': check_pkg_config('libavcodec'),
+        'req': True,
+        'fmsg': "FFmpeg/Libav development files not found.",
+    }, {
+        'name': 'is_ffmpeg',
+        'desc': 'libav* is FFmpeg',
+        # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
+        'func': check_statement('libavcodec/version.h',
+                                'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? 1 : -1]',
+                                use='libavcodec')
+    }, {
+        # This check should always result in the opposite of is_ffmpeg.
+        # Run it to make sure is_ffmpeg didn't fail for some other reason than
+        # the actual version check.
+        'name': 'is_libav',
+        'desc': 'libav* is Libav',
+        # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
+        'func': check_statement('libavcodec/version.h',
+                                'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? -1 : 1]',
+                                use='libavcodec')
+    }, {
         'name': 'libav',
-        'desc': 'libav/ffmpeg',
-        'func': check_pkg_config(*libav_pkg_config_checks),
+        'desc': 'Libav/FFmpeg library versions',
+        'deps_any': [ 'is_ffmpeg', 'is_libav' ],
+        'func': check_ffmpeg_or_libav_versions(),
         'req': True,
         'fmsg': "Unable to find development files for some of the required \
 FFmpeg/Libav libraries. You need at least {0}. Aborting.".format(libav_versions_string)
     }, {
-        'name': '--libswresample',
-        'desc': 'libswresample',
-        'func': check_pkg_config('libswresample', '>= 1.1.100'),
-    }, {
-        'name': '--libavresample',
-        'desc': 'libavresample',
-        'func': check_pkg_config('libavresample',  '>= 2.1.0'),
-        'deps_neg': ['libswresample'],
-    }, {
-        'name': 'resampler',
-        'desc': 'usable resampler found',
-        'deps_any': [ 'libavresample', 'libswresample' ],
-        'func': check_true,
-        'req':  True,
-        'fmsg': 'No resampler found. Install libavresample or libswresample (FFmpeg).'
-    }, {
-        'name': 'libavfilter',
-        'desc': 'libavfilter',
-        'func': check_pkg_config('libavfilter', '>= 5.0.0'),
-        'req':  True,
-    }, {
         'name': '--libavdevice',
         'desc': 'libavdevice',
-        'func': check_pkg_config('libavdevice', '>= 55.0.0'),
+        'func': check_pkg_config('libavdevice', '>= 57.0.0'),
     }, {
-        'name': 'avcodec-chroma-pos-api',
-        'desc': 'libavcodec avcodec_enum_to_chroma_pos API',
-        'func': check_statement('libavcodec/avcodec.h', """int x, y;
-            avcodec_enum_to_chroma_pos(&x, &y, AVCHROMA_LOC_UNSPECIFIED)""",
-            use='libav')
-    }, {
-        'name': 'avframe-metadata',
-        'desc': 'libavutil AVFrame metadata',
-        'func': check_statement('libavutil/frame.h',
-                                'av_frame_get_metadata(NULL)',
-                                use='libav')
-    }, {
-        'name': 'avframe-skip-samples',
-        'desc': 'libavutil AVFrame skip samples metadata',
-        'func': check_statement('libavutil/frame.h',
-                                'enum AVFrameSideDataType type = AV_FRAME_DATA_SKIP_SAMPLES',
-                                use='libav')
-    }, {
-        'name': 'av-pix-fmt-mmal',
-        'desc': 'libavutil AV_PIX_FMT_MMAL',
-        'func': check_statement('libavutil/pixfmt.h',
-                                'int x = AV_PIX_FMT_MMAL',
+        'name': 'avutil-imgcpy-uc',
+        'desc': 'libavutil GPU memcpy for hardware decoding',
+        'func': check_statement('libavutil/imgutils.h',
+                                'av_image_copy_uc_from(0,0,0,0,0,0,0)',
                                 use='libav'),
-    }, {
-        'name': 'av-version-info',
-        'desc': 'libavtuil av_version_info()',
-        'func': check_statement('libavutil/avutil.h',
-                                'const char *x = av_version_info()',
-                                use='libav'),
-    }, {
-        'name': 'av-new-pixdesc',
-        'desc': 'libavutil new pixdesc fields',
-        'func': check_statement('libavutil/pixdesc.h',
-                                'AVComponentDescriptor d; int x = d.depth',
-                                use='libav'),
-    }, {
-        'name': 'av-avpacket-int64-duration',
-        'desc': 'libavcodec 64 bit AVPacket.duration',
-        'func': check_statement('libavcodec/avcodec.h',
-                                'int x[(int)sizeof(((AVPacket){0}).duration) - 7]',
-                                use='libav'),
-    }, {
-        'name': 'av-subtitle-nopict',
-        'desc': 'libavcodec AVSubtitleRect AVPicture removal',
-        'func': check_statement('libavcodec/avcodec.h',
-                                'AVSubtitleRect r = {.linesize={0}}',
-                                use='libav'),
-    }, {
-        'name': 'avcodec-profile-name',
-        'desc': 'libavcodec avcodec_profile_name()',
-        'func': check_statement('libavcodec/avcodec.h',
-                                'avcodec_profile_name(0,0)',
-                                use='libav'),
-    }, {
-        'name': 'avcodec-new-codec-api',
-        'desc': 'libavcodec decode/encode API',
-        'func': check_statement('libavcodec/avcodec.h',
-                                'avcodec_send_packet(0,0)',
-                                use='libav'),
-    }, {
-        'name': 'avcodec-has-codecpar',
-        'desc': 'libavcodec AVCodecParameters API',
-        'func': check_statement('libavformat/avformat.h',
-                                '(void)offsetof(AVStream, codecpar)',
-                                use='libav'),
-    }, {
-        'name': 'avutil-has-hwcontext',
-        'desc': 'libavutil AVHWFramesContext API',
-        'func': check_statement('libavutil/frame.h',
-                                '(void)offsetof(AVFrame, hw_frames_ctx)',
-                                use='libav'),
-    }, {
-        'name': 'avutil-st2084',
-        'desc': 'libavutil AVCOL_TRC_SMPTEST2084',
-        'func': check_statement('libavutil/pixfmt.h',
-                                'AVCOL_TRC_SMPTEST2084',
-                                use='libav'),
-    }
+    },
 ]
 
 audio_output_features = [
     {
         'name': '--sdl2',
         'desc': 'SDL2',
-        'deps': ['atomics'],
         'func': check_pkg_config('sdl2'),
         'default': 'disable'
     }, {
         'name': '--sdl1',
         'desc': 'SDL (1.x)',
-        'deps': ['atomics'],
         'deps_neg': [ 'sdl2' ],
         'func': check_pkg_config('sdl'),
         'default': 'disable'
@@ -572,12 +519,11 @@ audio_output_features = [
     }, {
         'name': '--jack',
         'desc': 'JACK audio output',
-        'deps': ['atomics'],
         'func': check_pkg_config('jack'),
     }, {
         'name': '--openal',
         'desc': 'OpenAL audio output',
-        'func': check_pkg_config('openal', '>= 1.13'),
+        'func': check_openal,
         'default': 'disable'
     }, {
         'name': '--opensles',
@@ -590,14 +536,20 @@ audio_output_features = [
     }, {
         'name': '--coreaudio',
         'desc': 'CoreAudio audio output',
-        'deps': ['atomics'],
         'func': check_cc(
             fragment=load_fragment('coreaudio.c'),
             framework_name=['CoreFoundation', 'CoreAudio', 'AudioUnit', 'AudioToolbox'])
     }, {
+        'name': '--audiounit',
+        'desc': 'AudioUnit output for iOS',
+        'deps': ['atomics'],
+        'func': check_cc(
+            fragment=load_fragment('audiounit.c'),
+            framework_name=['Foundation', 'AudioToolbox'])
+    }, {
         'name': '--wasapi',
         'desc': 'WASAPI audio output',
-        'deps': ['win32', 'atomics'],
+        'deps': ['win32'],
         'func': check_cc(fragment=load_fragment('wasapi.c')),
     }
 ]
@@ -657,7 +609,9 @@ video_output_features = [
         'desc': 'OpenGL Cocoa Backend',
         'deps': [ 'cocoa' ],
         'groups': [ 'gl' ],
-        'func': check_true
+        'func': check_statement('IOSurface/IOSurface.h',
+                                'IOSurfaceRef surface;',
+                                framework='IOSurface')
     } , {
         'name': '--gl-x11',
         'desc': 'OpenGL X11 Backend',
@@ -710,6 +664,15 @@ video_output_features = [
         'groups': [ 'gl' ],
         'func': check_statement(['EGL/egl.h', 'EGL/eglext.h'],
                                 'int x = EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE')
+    } , {
+        'name': '--egl-angle-lib',
+        'desc': 'OpenGL Win32 ANGLE Library',
+        'deps': [ 'egl-angle' ],
+        'groups': [ 'gl' ],
+        'func': check_statement(['EGL/egl.h'],
+                                'eglCreateWindowSurface(0, 0, 0, 0)',
+                                cflags="-DGL_APICALL= -DEGLAPI= -DANGLE_NO_ALIASES -DANGLE_EXPORT=",
+                                lib=['EGL', 'GLESv2', 'dxguid', 'd3d9', 'gdi32', 'stdc++'])
     } , {
         'name': '--vdpau',
         'desc': 'VDPAU acceleration',
@@ -798,7 +761,7 @@ video_output_features = [
         ),
     }, {
         'name': '--standard-gl',
-        'desc': 'Desktop standard OpengGL support',
+        'desc': 'Desktop standard OpenGL support',
         'func': compose_checks(
             check_statement('GL/gl.h', '(void)GL_RGB32F'),     # arbitrary OpenGL 3.0 symbol
             check_statement('GL/gl.h', '(void)GL_LUMINANCE16') # arbitrary OpenGL legacy-only symbol
@@ -809,9 +772,13 @@ video_output_features = [
         'deps': ['android'],
         'func': check_statement('GLES3/gl3.h', '(void)GL_RGB32F'),  # arbitrary OpenGL ES 3.0 symbol
     } , {
+        'name': '--ios-gl',
+        'desc': 'iOS OpenGL ES support',
+        'func': check_statement('OpenGLES/ES3/glext.h', '(void)GL_RGB32F'),  # arbitrary OpenGL ES 3.0 symbol
+    } , {
         'name': '--any-gl',
         'desc': 'Any OpenGL (ES) support',
-        'deps_any': ['standard-gl', 'android-gl', 'cocoa'],
+        'deps_any': ['standard-gl', 'android-gl', 'ios-gl', 'cocoa'],
         'func': check_true
     } , {
         'name': '--plain-gl',
@@ -819,11 +786,22 @@ video_output_features = [
         'deps': ['any-gl'],
         'deps_any': [ 'libmpv-shared', 'libmpv-static' ],
         'func': check_true,
-    } , {
+    }, {
+        'name': '--mali-fbdev',
+        'desc': 'MALI via Linux fbdev',
+        'deps': ['standard-gl', 'libdl'],
+        'func': compose_checks(
+            check_cc(lib="EGL"),
+            check_cc(lib="GLESv2"),
+            check_statement('EGL/fbdev_window.h', 'struct fbdev_window test'),
+            check_statement('linux/fb.h', 'struct fb_var_screeninfo test'),
+        ),
+    }, {
         'name': '--gl',
         'desc': 'OpenGL video outputs',
         'deps_any': [ 'gl-cocoa', 'gl-x11', 'egl-x11', 'egl-drm',
-                      'gl-win32', 'gl-wayland', 'rpi', 'plain-gl' ],
+                      'gl-win32', 'gl-wayland', 'rpi', 'mali-fbdev',
+                      'plain-gl' ],
         'func': check_true,
         'req': True,
         'fmsg': "Unable to find OpenGL header files for video output. " +
@@ -832,7 +810,7 @@ video_output_features = [
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
-        'deps_any': [ 'egl-x11' ],
+        'deps_any': [ 'egl-x11', 'mali-fbdev', 'rpi', 'gl-wayland', 'egl-drm' ],
         'func': check_true
     }
 ]
@@ -844,13 +822,29 @@ hwaccel_features = [
         'deps': [ 'vaapi' ],
         'func': check_headers('libavcodec/vaapi.h', use='libav'),
     }, {
+        'name': '--vaapi-hwaccel-new',
+        'desc': 'libavcodec VAAPI hwaccel (new)',
+        'deps': [ 'vaapi-hwaccel' ],
+        'func': check_statement('libavcodec/version.h',
+            'int x[(LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 26, 0) && '
+            '       LIBAVCODEC_VERSION_MICRO < 100) ||'
+            '      (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 74, 100) && '
+            '       LIBAVCODEC_VERSION_MICRO >= 100)'
+            '      ? 1 : -1]',
+            use='libav'),
+    }, {
+        'name': '--vaapi-hwaccel-old',
+        'desc': 'libavcodec VAAPI hwaccel (old)',
+        'deps': [ 'vaapi-hwaccel' ],
+        'deps_neg': [ 'vaapi-hwaccel-new' ],
+        'func': check_true,
+    }, {
         'name': '--videotoolbox-hwaccel',
         'desc': 'libavcodec videotoolbox hwaccel',
         'func': compose_checks(
             check_headers('VideoToolbox/VideoToolbox.h'),
             check_statement('libavcodec/videotoolbox.h',
                             'av_videotoolbox_alloc_context()',
-                            framework='IOSurface',
                             use='libav')),
     } , {
         'name': '--videotoolbox-gl',
@@ -872,9 +866,14 @@ hwaccel_features = [
                     check_headers('libavcodec/dxva2.h',  use='libav'),
                     check_headers('libavcodec/d3d11va.h',  use='libav')),
     }, {
+        'name': '--cuda-hwaccel',
+        'desc': 'CUDA hwaccel',
+        'func': check_cc(fragment=load_fragment('cuda.c'),
+                         use='libav'),
+    }, {
         'name': 'sse4-intrinsics',
         'desc': 'GCC SSE4 intrinsics for GPU memcpy',
-        'deps_any': [ 'd3d-hwaccel', 'vaapi-hwaccel' ],
+        'deps_any': [ 'd3d-hwaccel', 'vaapi-hwaccel-old' ],
         'func': check_cc(fragment=load_fragment('sse.c')),
     }
 ]
@@ -940,6 +939,7 @@ _INSTALL_DIRS_LIST = [
     ('datadir', '${PREFIX}/share',    'data files'),
     ('mandir',  '${DATADIR}/man',     'man pages '),
     ('docdir',  '${DATADIR}/doc/mpv', 'documentation files'),
+    ('htmldir', '${DOCDIR}',          'html documentation files'),
     ('zshdir',  '${DATADIR}/zsh/site-functions', 'zsh completion functions'),
 
     ('confloaddir', '${CONFDIR}', 'configuration files load directory'),
@@ -1001,11 +1001,17 @@ def configure(ctx):
     ctx.find_program(cc,          var='CC')
     ctx.find_program(pkg_config,  var='PKG_CONFIG')
     ctx.find_program(ar,          var='AR')
-    ctx.find_program('perl',      var='BIN_PERL')
     ctx.find_program('rst2html',  var='RST2HTML',  mandatory=False)
     ctx.find_program('rst2man',   var='RST2MAN',   mandatory=False)
     ctx.find_program('rst2pdf',   var='RST2PDF',   mandatory=False)
     ctx.find_program(windres,     var='WINDRES',   mandatory=False)
+    ctx.find_program('perl',      var='BIN_PERL',  mandatory=False)
+
+    ctx.load('compiler_c')
+    ctx.load('waf_customizations')
+    ctx.load('dependencies')
+    ctx.load('detections.compiler')
+    ctx.load('detections.devices')
 
     for ident, _, _ in _INSTALL_DIRS_LIST:
         varname = ident.upper()
@@ -1014,12 +1020,6 @@ def configure(ctx):
         # keep substituting vars, until the paths are fully expanded
         while re.match('\$\{([^}]+)\}', ctx.env[varname]):
             ctx.env[varname] = Utils.subst_vars(ctx.env[varname], ctx.env)
-
-    ctx.load('compiler_c')
-    ctx.load('waf_customizations')
-    ctx.load('dependencies')
-    ctx.load('detections.compiler')
-    ctx.load('detections.devices')
 
     ctx.parse_dependencies(build_options)
     ctx.parse_dependencies(main_dependencies)
@@ -1049,6 +1049,13 @@ def configure(ctx):
 
     if ctx.dependency_satisfied('clang-database'):
         ctx.load('clang_compilation_database')
+
+    if ctx.dependency_satisfied('cplugins'):
+        # We need to export the libmpv symbols, since the mpv binary itself is
+        # not linked against libmpv. The C plugin needs to be able to pick
+        # up the libmpv symbols from the binary. We still restrict the set
+        # of exported symbols via mpv.def.
+        ctx.env.LINKFLAGS += ['-Wl,-export-dynamic']
 
     ctx.store_dependencies_lists()
 

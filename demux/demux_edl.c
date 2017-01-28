@@ -28,7 +28,6 @@
 #include "demux.h"
 #include "timeline.h"
 #include "common/msg.h"
-#include "common/global.h"
 #include "options/path.h"
 #include "misc/bstr.h"
 #include "common/common.h"
@@ -296,6 +295,9 @@ static void build_mpv_edl_timeline(struct timeline *tl)
 
 static int try_open_file(struct demuxer *demuxer, enum demux_check check)
 {
+    if (!demuxer->access_references)
+        return -1;
+
     struct priv *p = talloc_zero(demuxer, struct priv);
     demuxer->priv = p;
     demuxer->fully_read = true;

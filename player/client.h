@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #include "libmpv/client.h"
+#include "libmpv/stream_cb.h"
 
 struct MPContext;
 struct mpv_handle;
@@ -15,6 +16,7 @@ struct mp_log;
 #define MAX_CLIENT_NAME 64
 
 void mp_clients_init(struct MPContext *mpctx);
+void mp_client_enter_shutdown(struct MPContext *mpctx);
 void mp_clients_destroy(struct MPContext *mpctx);
 int mp_clients_num(struct MPContext *mpctx);
 bool mp_clients_all_initialized(struct MPContext *mpctx);
@@ -33,8 +35,6 @@ struct mp_log *mp_client_get_log(struct mpv_handle *ctx);
 struct MPContext *mp_client_get_core(struct mpv_handle *ctx);
 struct MPContext *mp_client_api_get_core(struct mp_client_api *api);
 
-void mp_resume_all(struct mpv_handle *ctx);
-
 // m_option.c
 void *node_get_alloc(struct mpv_node *node);
 
@@ -45,5 +45,8 @@ struct osd_state;
 struct mpv_opengl_cb_context *mp_opengl_create(struct mpv_global *g,
                                                struct mp_client_api *client_api);
 void kill_video(struct mp_client_api *client_api);
+
+bool mp_streamcb_lookup(struct mpv_global *g, const char *protocol,
+                        void **out_user_data, mpv_stream_cb_open_ro_fn *out_fn);
 
 #endif

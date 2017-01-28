@@ -18,6 +18,8 @@
 #include <assert.h>
 #include <windows.h>
 #include <dwmapi.h>
+
+#include "options/m_config.h"
 #include "video/out/w32_common.h"
 #include "video/out/win32/exclusive_hack.h"
 #include "context.h"
@@ -209,14 +211,6 @@ static void create_ctx(void *ptr)
     if (!w32_ctx->context)
         create_context_w32_old(ctx);
 
-    int pfmt = GetPixelFormat(w32_ctx->hdc);
-    PIXELFORMATDESCRIPTOR pfd;
-    if (DescribePixelFormat(w32_ctx->hdc, pfmt, sizeof(pfd), &pfd)) {
-        ctx->gl->fb_r = pfd.cRedBits;
-        ctx->gl->fb_g = pfd.cGreenBits;
-        ctx->gl->fb_b = pfd.cBlueBits;
-    }
-
     wglMakeCurrent(w32_ctx->hdc, NULL);
 }
 
@@ -309,10 +303,14 @@ static void w32_swap_buffers(MPGLContext *ctx)
     // default if we don't DwmFLush
     int new_swapinterval = w32_ctx->opt_swapinterval;
 
-    if (ctx->dwm_flush_opt >= 0) {
-        if ((ctx->dwm_flush_opt == 1 && !ctx->vo->opts->fullscreen) ||
-            (ctx->dwm_flush_opt == 2) ||
-            (ctx->dwm_flush_opt == 0 && compositor_active(ctx)))
+    int dwm_flush_opt;
+    mp_read_option_raw(ctx->global, "opengl-dwmflush", &m_option_type_choice,
+                       &dwm_flush_opt);
+
+    if (dwm_flush_opt >= 0) {
+        if ((dwm_flush_opt == 1 && !ctx->vo->opts->fullscreen) ||
+            (dwm_flush_opt == 2) ||
+            (dwm_flush_opt == 0 && compositor_active(ctx)))
         {
             if (DwmFlush() == S_OK)
                 new_swapinterval = 0;

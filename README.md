@@ -7,6 +7,7 @@
 
 * [Overview](#overview)
 * [Downloads](#downloads)
+* [Changelog](#changelog)
 * [Compilation](#compilation)
 * [FFmpeg vs. Libav](#ffmpeg-vs-libav)
 * [Release cycle](#release-cycle)
@@ -14,6 +15,7 @@
 * [Contributing](#contributing)
 * [Relation to MPlayer and mplayer2](#relation-to-mplayer-and-mplayer2)
 * [Wiki](https://github.com/mpv-player/mpv/wiki)
+* [FAQ](https://github.com/mpv-player/mpv/wiki/FAQ)
 * [Man pages](http://mpv.io/manual/master/)
 * [Contact](#contact)
 * [License](#license)
@@ -47,6 +49,20 @@ Releases can be found on the [release list][releases].
 For semi-official builds and third-party packages please see
 [mpv.io](http://mpv.io/installation/).
 
+## Changelog
+
+
+There is no completely changelog, however changes to the player core interface
+are listed in the [interface changelog][interface-changes].
+
+Changes to the C API are documented in the [client API changelog][api-changes].
+
+The [release list][releases] has a summary of most of the important changes
+on every release.
+
+Changes to the default key bindings are inidcated in
+[restore-old-bindings.conf][restore-old-bindings].
+
 ## Compilation
 
 
@@ -79,7 +95,7 @@ Essential dependencies (incomplete list):
 - Audio output development headers (libasound/ALSA, pulseaudio)
 - FFmpeg libraries (libavutil libavcodec libavformat libswscale libavfilter
   and either libswresample or libavresample)
-  At least FFmpeg 2.4.0 or Libav 11 is required.
+  At least FFmpeg 3.2.2 or Libav 12 is required.
 - zlib
 - iconv (normally provided by the system libc)
 - libass (OSD, OSC, text subtitles)
@@ -137,6 +153,20 @@ most likely the best maintenance out of all stable releases. Older releases
 are for distros, and at best receive basic changes like fixing critical security
 issues or build fixes, and at worst are completely abandoned.
 
+## FFmpeg ABI compatibility
+
+mpv does not support linking against FFmpeg versions it was not built with, even
+if the linked version is supposedly ABI-compatible with the version it was
+compiled against. Expect malfunctions, crashes, and security issues if you
+do it anyway.
+
+The reason for not supporting this is because it creates far too much complexity
+with little to no benefit, coupled with absurd and unusable FFmpeg API
+artifacts.
+
+Newer mpv versions will refuse to start if runtime and compile time FFmpeg
+library versions mismatch.
+
 ## Release cycle
 
 Every other month, an arbitrary git snapshot is made, and is assigned
@@ -183,7 +213,7 @@ In general, mpv should be considered a completely new program, rather than a
 MPlayer drop-in replacement.
 
 If you are wondering what's different from mplayer2 and MPlayer, an incomplete
-list of changes is located [here][mplayer-changes].
+and now unmaintained list of changes is located [here][mplayer-changes].
 
 ## Contact
 
@@ -206,6 +236,9 @@ only if discretion is required.
 [release-policy]: https://github.com/mpv-player/mpv/blob/master/DOCS/release-policy.md
 [windows_compilation]: https://github.com/mpv-player/mpv/blob/master/DOCS/compile-windows.md
 [mplayer-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/mplayer-changes.rst
+[interface-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/interface-changes.rst
+[api-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/client-api-changes.rst
+[restore-old-bindings]: https://github.com/mpv-player/mpv/blob/master/etc/restore-old-bindings.conf
 
 ## License
 

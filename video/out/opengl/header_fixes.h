@@ -62,6 +62,10 @@
 #define GL_DEBUG_SEVERITY_NOTIFICATION    0x826B
 #endif
 
+#ifndef GL_BACK_LEFT
+#define GL_BACK_LEFT                      0x0402
+#endif
+
 #if HAVE_ANDROID_GL
 #define GL_UNSIGNED_BYTE_3_3_2            0x8032
 #define GL_UNSIGNED_BYTE_2_3_3_REV        0x8362
@@ -86,6 +90,29 @@
 #define GL_LUMINANCE16_ALPHA16 0x8048
 #define GL_UNSIGNED_SHORT_8_8_APPLE 0x85BA
 #define GL_UNSIGNED_SHORT_8_8_REV_APPLE 0x85BB
+#endif
+
+#if HAVE_IOS_GL
+#define GL_WRITE_ONLY GL_WRITE_ONLY_OES
+#define GL_TEXTURE_1D 0x0DE0
+#define GL_R16 0x822A
+#define GL_RG16 0x822C
+#define GL_RGB10 0x8052
+#define GL_RGB16 0x8054
+#define GL_RGBA12 0x805A
+#define GL_RGBA16 0x805B
+#define GL_LUMINANCE8 GL_LUMINANCE8_EXT
+#define GL_LUMINANCE8_ALPHA8 GL_LUMINANCE8_ALPHA8_EXT
+#define GL_LUMINANCE16 0x8042
+#define GL_LUMINANCE16_ALPHA16 0x8048
+#define GL_TEXTURE_RED_SIZE 0x805C
+#define GL_TEXTURE_LUMINANCE_SIZE 0x8060
+#endif
+
+// GL_ARB_timer_query and EXT_disjoint_timer_query
+#ifndef GL_TIME_ELAPSED
+// Same as GL_TIME_ELAPSED_EXT
+#define GL_TIME_ELAPSED 0x88BF
 #endif
 
 // GL_OES_EGL_image_external, GL_NV_EGL_stream_consumer_external

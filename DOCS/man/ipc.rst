@@ -41,7 +41,7 @@ It's also possible to send input.conf style text-only commands:
 
 ::
 
-    > echo 'show_text ${playback-time}' | socat - /tmp/mpvsocket
+    > echo 'show-text ${playback-time}' | socat - /tmp/mpvsocket
 
 But you won't get a reply over the socket. (This particular command shows the
 playback time on the player's OSD.)
@@ -65,7 +65,7 @@ You can send commands from a command prompt:
 
 ::
 
-    echo show_text ${playback-time} >\\.\pipe\mpvsocket
+    echo show-text ${playback-time} >\\.\pipe\mpvsocket
 
 To be able to simultaneously read and write from the IPC pipe, like on Linux,
 it's necessary to write an external program that uses overlapped file I/O (or
@@ -240,16 +240,6 @@ extra commands can also be used as part of the protocol:
 
     By default, most events are enabled, and there is not much use for this
     command.
-
-``suspend``
-    Suspend the mpv main loop. There is a long-winded explanation of this in
-    the C API function ``mpv_suspend()``. In short, this prevents the player
-    from displaying the next video frame, so that you don't get blocked when
-    trying to access the player.
-
-``resume``
-    Undo one ``suspend`` call. ``suspend`` increments an internal counter, and
-    ``resume`` decrements it. When 0 is reached, the player is actually resumed.
 
 ``get_version``
     Returns the client API version the C API of the remote mpv instance

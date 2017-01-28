@@ -15,7 +15,6 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <initguid.h>
 #include <assert.h>
 #include <windows.h>
 #include <d3d11.h>
@@ -30,9 +29,10 @@
 #include "osdep/windows_utils.h"
 #include "hwdec.h"
 #include "video/hwdec.h"
+#include "video/decode/d3d.h"
 
 #ifndef EGL_D3D_TEXTURE_SUBRESOURCE_ID_ANGLE
-#define EGL_D3D_TEXTURE_SUBRESOURCE_ID_ANGLE 0x3AAB
+#define EGL_D3D_TEXTURE_SUBRESOURCE_ID_ANGLE 0x33AB
 #endif
 
 struct priv {
@@ -113,7 +113,8 @@ static int create(struct gl_hwdec *hw)
         !strstr(exts, "EGL_ANGLE_stream_producer_d3d_texture_nv12") ||
         !(strstr(hw->gl->extensions, "GL_OES_EGL_image_external_essl3") ||
           hw->gl->es == 200) ||
-        !strstr(exts, "EGL_EXT_device_query"))
+        !strstr(exts, "EGL_EXT_device_query") ||
+        !(hw->gl->mpgl_caps & MPGL_CAP_TEX_RG))
         return -1;
 
     HRESULT hr;
@@ -173,11 +174,15 @@ static int create(struct gl_hwdec *hw)
         goto fail;
     ID3D11Device_AddRef(p->d3d11_device);
 
+    if (!d3d11_check_decoding(p->d3d11_device)) {
+        MP_VERBOSE(hw, "D3D11 video decoding not supported on this system.\n");
+        goto fail;
+    }
+
     ID3D10Multithread *multithread;
     hr = ID3D11Device_QueryInterface(p->d3d11_device, &IID_ID3D10Multithread,
                                      (void **)&multithread);
     if (FAILED(hr)) {
-        ID3D10Multithread_Release(multithread);
         MP_ERR(hw, "Failed to get Multithread interface: %s\n",
                mp_HRESULT_to_str(hr));
         goto fail;
@@ -189,6 +194,7 @@ static int create(struct gl_hwdec *hw)
         .type = HWDEC_D3D11VA,
         .driver_name = hw->driver->name,
         .ctx = p->d3d11_device,
+        .download_image = d3d11_download_image,
     };
     hwdec_devices_add(hw->devs, &p->hwctx);
 
@@ -248,6 +254,7 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
         goto fail;
 
     params->imgfmt = params->hw_subfmt;
+    params->hw_subfmt = 0;
 
     for (int n = 0; n < num_planes; n++) {
         gl->ActiveTexture(GL_TEXTURE0 + texunits + n);
@@ -304,7 +311,6 @@ static int map_frame(struct gl_hwdec *hw, struct mp_image *hw_image,
                 .gl_target = GL_TEXTURE_EXTERNAL_OES,
                 .tex_w = texdesc.Width / 2,
                 .tex_h = texdesc.Height / 2,
-                .swizzle = "rgba", // even in ES2 mode (no LUMINANCE_ALPHA)
             },
         },
     };

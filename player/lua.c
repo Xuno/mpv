@@ -377,8 +377,10 @@ static int load_lua(struct mpv_handle *client, const char *fname)
     }
 
     lua_State *L = ctx->state = luaL_newstate();
-    if (!L)
+    if (!L) {
+        MP_FATAL(ctx, "Could not initialize Lua.\n");
         goto error_out;
+    }
 
     if (mp_cpcall(L, run_lua, ctx)) {
         const char *err = "unknown error";
@@ -391,8 +393,6 @@ static int load_lua(struct mpv_handle *client, const char *fname)
     r = 0;
 
 error_out:
-    osd_set_external(ctx->mpctx->osd, client, 0, 0, NULL); // remove overlay
-    mp_resume_all(client);
     if (ctx->state)
         lua_close(ctx->state);
     talloc_free(ctx);
@@ -450,20 +450,17 @@ static int script_find_config_file(lua_State *L)
 static int script_suspend(lua_State *L)
 {
     struct script_ctx *ctx = get_ctx(L);
-    mpv_suspend(ctx->client);
+    MP_ERR(ctx, "mp.suspend() is deprecated and does nothing.\n");
     return 0;
 }
 
 static int script_resume(lua_State *L)
 {
-    struct script_ctx *ctx = get_ctx(L);
-    mpv_resume(ctx->client);
     return 0;
 }
 
 static int script_resume_all(lua_State *L)
 {
-    mp_resume_all(get_ctx(L)->client);
     return 0;
 }
 
@@ -708,7 +705,7 @@ static void makenode(void *tmp, mpv_node *dst, lua_State *L, int t)
                 bool empty = lua_isnil(L, -1); // t[n]
                 lua_pop(L, 1); // -
                 if (empty) {
-                    count = n;
+                    count = n - 1;
                     break;
                 }
             }
@@ -750,7 +747,7 @@ static void makenode(void *tmp, mpv_node *dst, lua_State *L, int t)
                 makenode(tmp, &list->values[list->num], L, -1);
                 if (lua_type(L, -2) != LUA_TSTRING) {
                     luaL_error(L, "key must be a string, but got %s",
-                               lua_typename(L, -2));
+                               lua_typename(L, lua_type(L, -2)));
                 }
                 list->keys[list->num] = talloc_strdup(tmp, lua_tostring(L, -2));
                 list->num++;
@@ -971,7 +968,7 @@ static int script_set_osd_ass(lua_State *L)
     if (!text[0])
         text = " "; // force external OSD initialization
     osd_set_external(ctx->mpctx->osd, ctx->client, res_x, res_y, (char *)text);
-    mp_input_wakeup(ctx->mpctx->input);
+    mp_wakeup_core(ctx->mpctx);
     return 0;
 }
 
@@ -1082,6 +1079,7 @@ static int script_readdir(lua_State *L)
         lua_pushstring(L, name); // list index name
         lua_settable(L, -3); // list
     }
+    closedir(dir);
     talloc_free(fullpath);
     return 1;
 }
@@ -1131,8 +1129,6 @@ static int script_subprocess(lua_State *L)
     luaL_checktype(L, 1, LUA_TTABLE);
     void *tmp = mp_lua_PITA(L);
 
-    mp_resume_all(ctx->client);
-
     lua_getfield(L, 1, "args"); // args
     int num_args = mp_lua_len(L, -1);
     char *args[256];
@@ -1181,6 +1177,35 @@ static int script_subprocess(lua_State *L)
     lua_setfield(L, -2, "stdout"); // res
     lua_pushboolean(L, status == MP_SUBPROCESS_EKILLED_BY_US); // res b
     lua_setfield(L, -2, "killed_by_us"); // res
+    return 1;
+}
+
+static int script_subprocess_detached(lua_State *L)
+{
+    struct script_ctx *ctx = get_ctx(L);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    void *tmp = mp_lua_PITA(L);
+
+    lua_getfield(L, 1, "args"); // args
+    int num_args = mp_lua_len(L, -1);
+    char *args[256];
+    if (num_args > MP_ARRAY_SIZE(args) - 1) // last needs to be NULL
+        luaL_error(L, "too many arguments");
+    if (num_args < 1)
+        luaL_error(L, "program name missing");
+    for (int n = 0; n < num_args; n++) {
+        lua_pushinteger(L, n + 1); // args n
+        lua_gettable(L, -2); // args arg
+        args[n] = talloc_strdup(tmp, lua_tostring(L, -1));
+        if (!args[n])
+            luaL_error(L, "program arguments must be strings");
+        lua_pop(L, 1); // args
+    }
+    args[num_args] = NULL;
+    lua_pop(L, 1); // -
+
+    mp_subprocess_detached(ctx->log, args);
+    lua_pushnil(L);
     return 1;
 }
 
@@ -1268,6 +1293,7 @@ static const struct fn_entry utils_fns[] = {
     FN_ENTRY(split_path),
     FN_ENTRY(join_path),
     FN_ENTRY(subprocess),
+    FN_ENTRY(subprocess_detached),
     FN_ENTRY(parse_json),
     FN_ENTRY(format_json),
     {0}
@@ -1306,6 +1332,7 @@ static void add_functions(struct script_ctx *ctx)
 }
 
 const struct mp_scripting mp_scripting_lua = {
+    .name = "lua script",
     .file_ext = "lua",
     .load = load_lua,
 };

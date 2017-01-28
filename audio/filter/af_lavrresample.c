@@ -36,6 +36,9 @@
 #include "common/common.h"
 #include "config.h"
 
+#define HAVE_LIBSWRESAMPLE HAVE_IS_FFMPEG
+#define HAVE_LIBAVRESAMPLE HAVE_IS_LIBAV
+
 #if HAVE_LIBAVRESAMPLE
 #include <libavresample/avresample.h>
 #elif HAVE_LIBSWRESAMPLE
@@ -99,10 +102,6 @@ static double get_delay(struct af_resample *s)
     return avresample_get_delay(s->avrctx) / (double)s->in_rate +
            avresample_available(s->avrctx) / (double)s->out_rate;
 }
-static void drop_all_output(struct af_resample *s)
-{
-    while (avresample_read(s->avrctx, NULL, 1000) > 0) {}
-}
 static int get_out_samples(struct af_resample *s, int in_samples)
 {
     return avresample_get_out_samples(s->avrctx, in_samples);
@@ -113,18 +112,9 @@ static double get_delay(struct af_resample *s)
     int64_t base = s->in_rate * (int64_t)s->out_rate;
     return swr_get_delay(s->avrctx, base) / (double)base;
 }
-static void drop_all_output(struct af_resample *s)
-{
-    while (swr_drop_output(s->avrctx, 1000) > 0) {}
-}
 static int get_out_samples(struct af_resample *s, int in_samples)
 {
-#if LIBSWRESAMPLE_VERSION_MAJOR > 1 || LIBSWRESAMPLE_VERSION_MINOR >= 2
     return swr_get_out_samples(s->avrctx, in_samples);
-#else
-    return av_rescale_rnd(in_samples, s->out_rate, s->in_rate, AV_ROUND_UP)
-           + swr_get_delay(s->avrctx, s->out_rate);
-#endif
 }
 #endif
 
@@ -171,12 +161,6 @@ static int check_output_conversion(int mp_format)
     if (mp_format == AF_FORMAT_S24)
         return AV_SAMPLE_FMT_S32;
     return af_to_avformat(mp_format);
-}
-
-bool af_lavrresample_test_conversion(int src_format, int dst_format)
-{
-    return af_to_avformat(src_format) != AV_SAMPLE_FMT_NONE &&
-           check_output_conversion(dst_format) != AV_SAMPLE_FMT_NONE;
 }
 
 static struct mp_chmap fudge_pairs[][2] = {
@@ -407,28 +391,22 @@ static int control(struct af_instance *af, int cmd, void *arg)
             r = configure_lavrr(af, in, out, true);
         return r;
     }
-    case AF_CONTROL_SET_FORMAT: {
-        int format = *(int *)arg;
-        if (format && check_output_conversion(format) == AV_SAMPLE_FMT_NONE)
-            return AF_FALSE;
-
-        mp_audio_set_format(af->data, format);
-        return AF_OK;
-    }
-    case AF_CONTROL_SET_CHANNELS: {
-        mp_audio_set_channels(af->data, (struct mp_chmap *)arg);
-        return AF_OK;
-    }
-    case AF_CONTROL_SET_RESAMPLE_RATE:
-        af->data->rate = *(int *)arg;
-        return AF_OK;
     case AF_CONTROL_SET_PLAYBACK_SPEED_RESAMPLE: {
         s->playback_speed = *(double *)arg;
         return AF_OK;
     }
     case AF_CONTROL_RESET:
-        if (s->avrctx)
-            drop_all_output(s);
+        if (s->avrctx) {
+#if HAVE_LIBSWRESAMPLE
+            swr_close(s->avrctx);
+            if (swr_init(s->avrctx) < 0) {
+                close_lavrr(af);
+                return AF_ERROR;
+            }
+#else
+            while (avresample_read(s->avrctx, NULL, 1000) > 0) {}
+#endif
+        }
         return AF_OK;
     }
     return AF_UNKNOWN;
@@ -500,18 +478,19 @@ static void reorder_planes(struct mp_audio *mpa, int *reorder,
 static int filter_resample(struct af_instance *af, struct mp_audio *in)
 {
     struct af_resample *s = af->priv;
+    struct mp_audio *out = NULL;
+
+    if (!s->avrctx)
+        goto error;
 
     int samples = get_out_samples(s, in ? in->samples : 0);
 
     struct mp_audio out_format = s->pool_fmt;
-    struct mp_audio *out = mp_audio_pool_get(af->out_pool, &out_format, samples);
+    out = mp_audio_pool_get(af->out_pool, &out_format, samples);
     if (!out)
         goto error;
     if (in)
         mp_audio_copy_attributes(out, in);
-
-    if (!s->avrctx)
-        goto error;
 
     if (out->samples) {
         out->samples = resample_frame(s->avrctx, out, in);

@@ -54,20 +54,16 @@ const struct image_writer_opts image_writer_opts_defaults = {
 
 #define OPT_BASE_STRUCT struct image_writer_opts
 
-const struct m_sub_options image_writer_conf = {
-    .opts = (const m_option_t[]) {
-        OPT_INTRANGE("jpeg-quality", jpeg_quality, 0, 0, 100),
-        OPT_INTRANGE("jpeg-smooth", jpeg_smooth, 0, 0, 100),
-        OPT_FLAG("jpeg-source-chroma", jpeg_source_chroma, 0),
-        OPT_INTRANGE("png-compression", png_compression, 0, 0, 9),
-        OPT_INTRANGE("png-filter", png_filter, 0, 0, 5),
-        OPT_STRING("format", format, 0),
-        OPT_FLAG("high-bit-depth", high_bit_depth, 0),
-        OPT_FLAG("tag-colorspace", tag_csp, 0),
-        {0},
-    },
-    .size = sizeof(struct image_writer_opts),
-    .defaults = &image_writer_opts_defaults,
+const struct m_option image_writer_opts[] = {
+    OPT_INTRANGE("jpeg-quality", jpeg_quality, 0, 0, 100),
+    OPT_INTRANGE("jpeg-smooth", jpeg_smooth, 0, 0, 100),
+    OPT_FLAG("jpeg-source-chroma", jpeg_source_chroma, 0),
+    OPT_INTRANGE("png-compression", png_compression, 0, 0, 9),
+    OPT_INTRANGE("png-filter", png_filter, 0, 0, 5),
+    OPT_STRING("format", format, 0),
+    OPT_FLAG("high-bit-depth", high_bit_depth, 0),
+    OPT_FLAG("tag-colorspace", tag_csp, 0),
+    {0},
 };
 
 struct image_writer_ctx {
@@ -133,12 +129,18 @@ static bool write_lavc(struct image_writer_ctx *ctx, mp_image_t *image, FILE *fp
     pic->width = avctx->width;
     pic->height = avctx->height;
     if (ctx->opts->tag_csp) {
-        pic->color_primaries = mp_csp_prim_to_avcol_pri(image->params.primaries);
-        pic->color_trc = mp_csp_trc_to_avcol_trc(image->params.gamma);
+        pic->color_primaries = mp_csp_prim_to_avcol_pri(image->params.color.primaries);
+        pic->color_trc = mp_csp_trc_to_avcol_trc(image->params.color.gamma);
     }
-    int ret = avcodec_encode_video2(avctx, &pkt, pic, &got_output);
+
+    int ret = avcodec_send_frame(avctx, pic);
     if (ret < 0)
         goto error_exit;
+    avcodec_send_frame(avctx, NULL); // send EOF
+    ret = avcodec_receive_packet(avctx, &pkt);
+    if (ret < 0)
+        goto error_exit;
+    got_output = 1;
 
     fwrite(pkt.data, pkt.size, 1, fp);
 

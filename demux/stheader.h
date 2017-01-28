@@ -22,6 +22,7 @@
 
 #include "common/common.h"
 #include "audio/chmap.h"
+#include "video/csputils.h"
 
 struct MPOpts;
 struct demuxer;
@@ -46,6 +47,8 @@ struct sh_stream {
     bool forced_track;          // container forced track flag
     int hls_bitrate;
 
+    struct mp_tags *tags;
+
     bool missing_timestamps;
 
     // stream is a picture (such as album art)
@@ -68,9 +71,10 @@ struct mp_codec_params {
     int extradata_size;
 
     // Codec specific header data (set by demux_lavf.c only)
-    // Which one is in use depends on HAVE_AVCODEC_HAS_CODECPAR.
-    struct AVCodecContext *lav_headers;
     struct AVCodecParameters *lav_codecpar;
+
+    // Timestamp granularity for converting double<->rational timestamps.
+    int native_tb_num, native_tb_den;
 
     // STREAM_AUDIO
     int samplerate;
@@ -82,11 +86,13 @@ struct mp_codec_params {
 
     // STREAM_VIDEO
     bool avi_dts;         // use DTS timing; first frame and DTS is 0
-    float fps;            // frames per second (set only if constant fps)
+    double fps;           // frames per second (set only if constant fps)
+    bool reliable_fps;    // the fps field is definitely not broken
     int par_w, par_h;     // pixel aspect ratio (0 if unknown/square)
     int disp_w, disp_h;   // display size
     int rotate;           // intended display rotation, in degrees, [0, 359]
     int stereo_mode;      // mp_stereo3d_mode (0 if none/unknown)
+    struct mp_colorspace color; // colorspace info where available
 
     // STREAM_VIDEO + STREAM_AUDIO
     int bits_per_coded_sample;

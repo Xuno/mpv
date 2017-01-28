@@ -167,6 +167,7 @@ static int reinit(struct gl_hwdec *hw, struct mp_image_params *params)
     gl->BindTexture(GL_TEXTURE_2D, 0);
 
     params->imgfmt = IMGFMT_RGB0;
+    params->hw_subfmt = 0;
 
     return 0;
 }
@@ -185,7 +186,7 @@ static int map_frame(struct gl_hwdec *hw, struct mp_image *hw_image,
                           0, 0, hw_image->w, hw_image->h,
                           0, 0, hw_image->w, hw_image->h,
                           NULL, 0,
-                          va_get_colorspace_flag(hw_image->params.colorspace));
+                          va_get_colorspace_flag(hw_image->params.color.space));
     CHECK_VA_STATUS(p, "vaPutSurface()");
     va_unlock(p->ctx);
 

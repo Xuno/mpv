@@ -104,10 +104,10 @@ Installing MSYS2
    It doesn't matter whether the i686 or the x86_64 version is used. Both can
    build 32-bit and 64-bit binaries when running on a 64-bit version of Windows.
 
-2. Start a MinGW-w64 shell (``mingw64_shell.bat``). Note that this is different
+2. Start a MinGW-w64 shell (``mingw64.exe``). Note that this is different
    from the MSYS2 shell that is started from the final installation dialog.
 
-   For a 32-bit build, use ``mingw32_shell.bat``.
+   For a 32-bit build, use ``mingw32.exe``.
 
 Updating MSYS2
 --------------
@@ -118,7 +118,7 @@ separately.
 ```bash
 # Check for core updates. If instructed, close the shell window and reopen it
 # before continuing.
-update-core
+pacman -Syu
 
 # Update everything else
 pacman -Su
@@ -166,12 +166,27 @@ Or, compile and install both libmpv and mpv:
 ./waf configure CC=gcc.exe --check-c-compiler=gcc --enable-libmpv-shared --prefix=/mingw64
 ./waf install
 
-# waf installs libmpv to the wrong directory, so fix it up
-mv -f /mingw64/bin/pkgconfig/mpv.pc /mingw64/lib/pkgconfig/
-mv -f /mingw64/bin/libmpv.dll.a /mingw64/lib/
-sed -i 's_/mingw64/bin_/mingw64/lib_' /mingw64/lib/pkgconfig/mpv.pc
-rmdir /mingw64/bin/pkgconfig
+# waf installs libmpv dll to the wrong directory, so fix it up
+mv -f /mingw64/lib/mpv-1.dll /mingw64/bin/
 ```
+
+Linking libmpv with MSVC programs
+---------------------------------
+
+You can build C++ programs in Visual Studio and link them with libmpv. To do
+this, you need a Visual Studio which supports ``stdint.h`` (recent ones do),
+and you need to create a import library for the mpv DLL:
+
+```bash
+lib /def:mpv.def /name:mpv-1.dll /out:mpv.lib /MACHINE:X64
+```
+
+The string in the ``/name:`` parameter must match the filename of the DLL (this
+is simply the filename the MSVC linker will use). The ``mpv.def`` can be
+retrieved from the mpv build directory, or can be produced by MingGW's
+gendef.exe helper from the mpv DLL.
+
+Static linking is not possible.
 
 Running mpv
 -----------
@@ -190,11 +205,10 @@ DLLs in that folder. The simplest solution is to add ``C:\msys64\mingw64\bin``
 to the windows system ``%PATH%``. Beware though that this can cause problems or
 confusion in Cygwin if that is also installed on the machine.
 
-Use of the ANGLE OpenGL backend requires a copy of ``d3dcompiler_43.dll`` (yes,
-exactly 43) in the path or in the same folder as mpv. It must be of the same
-architecture (x86_64 / i686) as the mpv you compiled. You can find a copy in the
-official mpv builds:
+Use of the ANGLE OpenGL backend requires a copy of the D3D compiler DLL that
+matches the version of the D3D SDK that ANGLE was built with
+(``d3dcompiler_43.dll`` in case of MinGW-built ANGLE) in the path or in the
+same folder as mpv. It must be of the same architecture (x86_64 / i686) as the
+mpv you compiled. You can find copies here:
 
-https://mpv.srsfckn.biz/mpv-x86_64-20160118.7z
-
-https://mpv.srsfckn.biz/mpv-i686-20160118.7z
+https://mpv.srsfckn.biz/d3dcompiler.7z

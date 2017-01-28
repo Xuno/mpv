@@ -34,11 +34,11 @@ struct sd_functions {
     void (*select)(struct sd *sd, bool selected);
     void (*uninit)(struct sd *sd);
 
-    bool (*accepts_packet)(struct sd *sd); // implicit default if NULL: true
+    bool (*accepts_packet)(struct sd *sd, double pts); // implicit default if NULL: true
     int (*control)(struct sd *sd, enum sd_ctrl cmd, void *arg);
 
-    void (*get_bitmaps)(struct sd *sd, struct mp_osd_res dim, double pts,
-                        struct sub_bitmaps *res);
+    void (*get_bitmaps)(struct sd *sd, struct mp_osd_res dim, int format,
+                        double pts, struct sub_bitmaps *res);
     char *(*get_text)(struct sd *sd, double pts);
 };
 

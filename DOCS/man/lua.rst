@@ -43,9 +43,8 @@ timers added with ``mp.add_timeout`` or similar.
 
 When the player quits, all scripts will be asked to terminate. This happens via
 a ``shutdown`` event, which by default will make the event loop return. If your
-script got into an endless loop, mpv will probably behave fine during playback
-(unless the player is suspended, see ``mp.suspend``), but it won't terminate
-when quitting, because it's waiting on your script.
+script got into an endless loop, mpv will probably behave fine during playback,
+but it won't terminate when quitting, because it's waiting on your script.
 
 Internally, the C code will call the Lua function ``mp_event_loop`` after
 loading a Lua script. This function is normally defined by the default prelude
@@ -175,7 +174,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     Similar to ``mp.set_property``, but set the given property using its native
     type.
 
-    Since there are several data types which can not represented natively in
+    Since there are several data types which cannot represented natively in
     Lua, this might not always work as expected. For example, while the Lua
     wrapper can do some guesswork to decide whether a Lua table is an array
     or a map, this would fail with empty tables. Also, there are not many
@@ -412,21 +411,16 @@ These also live in the ``mp`` module, but are documented separately as they
 are useful only in special situations.
 
 ``mp.suspend()``
-    Suspend the mpv main loop. There is a long-winded explanation of this in
-    the C API function ``mpv_suspend()``. In short, this prevents the player
-    from displaying the next video frame, so that you don't get blocked when
-    trying to access the player.
-
-    Before mpv 0.17.0, this was automatically called by the event handler.
+    This function has been deprecated in mpv 0.21.0 and does nothing starting
+    with mpv 0.23.0 (no replacement).
 
 ``mp.resume()``
-    Undo one ``mp.suspend()`` call. ``mp.suspend()`` increments an internal
-    counter, and ``mp.resume()`` decrements it. When 0 is reached, the player
-    is actually resumed.
+    This function has been deprecated in mpv 0.21.0 and does nothing starting
+    with mpv 0.23.0 (no replacement).
 
 ``mp.resume_all()``
-    This resets the internal suspend counter and resumes the player. (It's
-    like calling ``mp.resume()`` until the player is actually resumed.)
+    This function has been deprecated in mpv 0.21.0 and does nothing starting
+    with mpv 0.23.0 (no replacement).
 
 ``mp.get_wakeup_pipe()``
     Calls ``mpv_get_wakeup_pipe()`` and returns the read end of the wakeup
@@ -449,6 +443,18 @@ are useful only in special situations.
     emptied. It's strongly recommended to use ``mp.get_next_timeout()`` and
     ``mp.get_wakeup_pipe()`` if you're interested in properly working
     notification of new events and working timers.
+
+``mp.register_idle(fn)``
+    Register an event loop idle handler. Idle handlers are called before the
+    script goes to sleep after handling all new events. This can be used for
+    example to delay processing of property change events: if you're observing
+    multiple properties at once, you might not want to act on each property
+    change, but only when all change notifications have been received.
+
+``mp.unregister_idle(fn)``
+    Undo ``mp.register_idle(fn)``. This removes all idle handlers that
+    are equal to the ``fn`` parameter. This uses normal Lua ``==`` comparison,
+    so be careful when dealing with closures.
 
 ``mp.enable_messages(level)``
     Set the minimum log level of which mpv message output to receive. These
@@ -541,8 +547,8 @@ Example command-line::
      --script-opts=myscript-optionA=TEST,myscript-optionB=0,myscript-optionC=yes
 
 
-mp.utils options
-----------------
+mp.utils functions
+------------------
 
 This built-in module provides generic helper functions for Lua, and have
 strictly speaking nothing to do with mpv or video/audio playback. They are
@@ -633,7 +639,16 @@ strictly part of the guaranteed API.
             Set to ``true`` if the process has been killed by mpv as a result
             of ``cancellable`` being set to ``true``.
 
-    In all cases, ``mp.resume_all()`` is implicitly called.
+``utils.subprocess_detached(t)``
+    Runs an external process and detaches it from mpv's control.
+
+    The parameter ``t`` is a table. The function reads the following entries:
+
+        ``args``
+            Array of strings of the same semantics as the ``args`` used in the
+            ``subprocess`` function.
+
+    The function returns ``nil``.
 
 ``utils.parse_json(str [, trail])``
     Parses the given string argument as JSON, and returns it as a Lua table. On

@@ -36,25 +36,25 @@
 #define OPT_BASE_STRUCT struct encode_opts
 const struct m_sub_options encode_config = {
     .opts = (const m_option_t[]) {
-        OPT_STRING("o", file, CONF_GLOBAL | CONF_NOCFG | CONF_PRE_PARSE),
-        OPT_STRING("of", format, CONF_GLOBAL),
-        OPT_STRINGLIST("ofopts*", fopts, CONF_GLOBAL),
-        OPT_FLOATRANGE("ofps", fps, CONF_GLOBAL, 0.0, 1000000.0),
-        OPT_FLOATRANGE("omaxfps", maxfps, CONF_GLOBAL, 0.0, 1000000.0),
-        OPT_STRING("ovc", vcodec, CONF_GLOBAL),
-        OPT_STRINGLIST("ovcopts*", vopts, CONF_GLOBAL),
-        OPT_STRING("oac", acodec, CONF_GLOBAL),
-        OPT_STRINGLIST("oacopts*", aopts, CONF_GLOBAL),
-        OPT_FLAG("oharddup", harddup, CONF_GLOBAL),
-        OPT_FLOATRANGE("ovoffset", voffset, CONF_GLOBAL, -1000000.0, 1000000.0),
-        OPT_FLOATRANGE("oaoffset", aoffset, CONF_GLOBAL, -1000000.0, 1000000.0),
-        OPT_FLAG("ocopyts", copyts, CONF_GLOBAL),
-        OPT_FLAG("orawts", rawts, CONF_GLOBAL),
-        OPT_FLAG("oautofps", autofps, CONF_GLOBAL),
-        OPT_FLAG("oneverdrop", neverdrop, CONF_GLOBAL),
-        OPT_FLAG("ovfirst", video_first, CONF_GLOBAL),
-        OPT_FLAG("oafirst", audio_first, CONF_GLOBAL),
-        OPT_FLAG("ometadata", metadata, CONF_GLOBAL),
+        OPT_STRING("o", file, M_OPT_FIXED | CONF_NOCFG | CONF_PRE_PARSE),
+        OPT_STRING("of", format, M_OPT_FIXED),
+        OPT_STRINGLIST("ofopts*", fopts, M_OPT_FIXED),
+        OPT_FLOATRANGE("ofps", fps, M_OPT_FIXED, 0.0, 1000000.0),
+        OPT_FLOATRANGE("omaxfps", maxfps, M_OPT_FIXED, 0.0, 1000000.0),
+        OPT_STRING("ovc", vcodec, M_OPT_FIXED),
+        OPT_STRINGLIST("ovcopts*", vopts, M_OPT_FIXED),
+        OPT_STRING("oac", acodec, M_OPT_FIXED),
+        OPT_STRINGLIST("oacopts*", aopts, M_OPT_FIXED),
+        OPT_FLAG("oharddup", harddup, M_OPT_FIXED),
+        OPT_FLOATRANGE("ovoffset", voffset, M_OPT_FIXED, -1000000.0, 1000000.0),
+        OPT_FLOATRANGE("oaoffset", aoffset, M_OPT_FIXED, -1000000.0, 1000000.0),
+        OPT_FLAG("ocopyts", copyts, M_OPT_FIXED),
+        OPT_FLAG("orawts", rawts, M_OPT_FIXED),
+        OPT_FLAG("oautofps", autofps, M_OPT_FIXED),
+        OPT_FLAG("oneverdrop", neverdrop, M_OPT_FIXED),
+        OPT_FLAG("ovfirst", video_first, M_OPT_FIXED),
+        OPT_FLAG("oafirst", audio_first, M_OPT_FIXED),
+        OPT_FLAG("ometadata", metadata, M_OPT_FIXED),
         {0}
     },
     .size = sizeof(struct encode_opts),
@@ -473,7 +473,7 @@ static void encode_2pass_prepare(struct encode_lavc_context *ctx,
             if (!(*bytebuf = stream_open(buf, ctx->global))) {
                 MP_WARN(ctx, "%s: could not open '%s', "
                        "disabling 2-pass encoding at pass 2\n", prefix, buf);
-                codec->flags &= ~CODEC_FLAG_PASS2;
+                codec->flags &= ~AV_CODEC_FLAG_PASS2;
                 set_to_avdictionary(ctx, dictp, "flags", "-pass2");
             } else {
                 struct bstr content = stream_read_complete(*bytebuf, NULL,
@@ -595,12 +595,7 @@ int encode_lavc_alloc_stream(struct encode_lavc_context *ctx,
             }
             return -1;
         }
-#if HAVE_AVCODEC_HAS_CODECPAR
         ctx->vcc = avcodec_alloc_context3(ctx->vc);
-#else
-        avcodec_get_context_defaults3(ctx->vst->codec, ctx->vc);
-        ctx->vcc = ctx->vst->codec;
-#endif
 
         // Using codec->time_base is deprecated, but needed for older lavf.
         ctx->vst->time_base = ctx->timebase;
@@ -635,12 +630,7 @@ int encode_lavc_alloc_stream(struct encode_lavc_context *ctx,
             }
             return -1;
         }
-#if HAVE_AVCODEC_HAS_CODECPAR
         ctx->acc = avcodec_alloc_context3(ctx->ac);
-#else
-        avcodec_get_context_defaults3(ctx->ast->codec, ctx->ac);
-        ctx->acc = ctx->ast->codec;
-#endif
 
         // Using codec->time_base is deprecated, but needed for older lavf.
         ctx->ast->time_base = ctx->timebase;
@@ -708,10 +698,8 @@ int encode_lavc_open_codec(struct encode_lavc_context *ctx,
         }
 
         ret = avcodec_open2(codec, ctx->vc, &ctx->voptions);
-#if HAVE_AVCODEC_HAS_CODECPAR
         if (ret >= 0)
             ret = avcodec_parameters_from_context(ctx->vst->codecpar, codec);
-#endif
 
         // complain about all remaining options, then free the dict
         for (de = NULL; (de = av_dict_get(ctx->voptions, "", de,
@@ -747,10 +735,8 @@ int encode_lavc_open_codec(struct encode_lavc_context *ctx,
         }
 
         ret = avcodec_open2(codec, ctx->ac, &ctx->aoptions);
-#if HAVE_AVCODEC_HAS_CODECPAR
         if (ret >= 0)
             ret = avcodec_parameters_from_context(ctx->ast->codecpar, codec);
-#endif
 
         // complain about all remaining options, then free the dict
         for (de = NULL; (de = av_dict_get(ctx->aoptions, "", de,
@@ -826,11 +812,7 @@ int encode_lavc_write_frame(struct encode_lavc_context *ctx, AVStream *stream,
         (int)packet->size);
 
 
-#if HAVE_AVCODEC_HAS_CODECPAR
     switch (stream->codecpar->codec_type) {
-#else
-    switch (stream->codec->codec_type) {
-#endif
         case AVMEDIA_TYPE_VIDEO:
             ctx->vbytes += packet->size;
             ++ctx->frames;

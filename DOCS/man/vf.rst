@@ -214,7 +214,7 @@ Available filters are:
         Format name, e.g. rgb15, bgr24, 420p, etc. (default: don't change).
     ``<outfmt>``
         Format name that should be substituted for the output. If they do not
-        have the same bytes per pixel and chroma subsamplimg, it will fail.
+        have the same bytes per pixel and chroma subsampling, it will fail.
     ``<colormatrix>``
         Controls the YUV to RGB color space conversion when playing video. There
         are various standards. Normally, BT.601 should be used for SD video, and
@@ -288,6 +288,8 @@ Available filters are:
         :adobe:        Adobe RGB (1998)
         :prophoto:     ProPhoto RGB (ROMM)
         :cie1931:      CIE 1931 RGB
+        :dci-p3:       DCI-P3 (Digital Cinema)
+        :v-gamut:      Panasonic V-Gamut primaries
 
     ``<gamma>``
        Gamma function the source file was encoded with. Normally this should be set
@@ -311,6 +313,8 @@ Available filters are:
        :gamma2.8:     Pure power curve (gamma 2.8)
        :prophoto:     ProPhoto RGB (ROMM) curve
        :st2084:       SMPTE ST2084 (HDR) curve
+       :std-b67:      ARIB STD-B67 (Hybrid Log-gamma) curve
+       :v-log:        Panasonic V-Log transfer curve
 
     ``<peak>``
         Reference peak illumination for the video file. This is mostly
@@ -802,13 +806,6 @@ Available filters are:
         1-9
             Apply high quality VDPAU scaling (needs capable hardware).
 
-``vdpaurb``
-    VDPAU video read back. Works with ``--vo=vdpau`` and ``--vo=opengl`` only.
-    This filter will read back frames decoded by VDPAU so that other filters,
-    which are not normally compatible with VDPAU, can be used like normal.
-    This filter must be specified before ``vdpaupp`` in the filter chain if
-    ``vdpaupp`` is used.
-
 ``d3d11vpp``
     Direct3D 11 video post processing. Currently requires D3D11 hardware
     decoding for use.
@@ -817,6 +814,12 @@ Available filters are:
         Whether deinterlacing is enabled (default: no).
     ``interlaced-only=<yes|no>``
         If ``yes`` (default), only deinterlace frames marked as interlaced.
+    ``mode=<blend|bob|adaptive|mocomp|ivctc|none>``
+        Tries to select a video processor with the given processing capability.
+        If a video processor supports multiple capabilities, it is not clear
+        which algorithm is actually selected. ``none`` always falls back. On
+        most if not all hardware, this option will probably do nothing, because
+        a video processor usually supports all modes or none.
 
 ``buffer=<num>``
     Buffer ``<num>`` frames in the filter chain. This filter is probably pretty

@@ -125,6 +125,7 @@ static const struct gl_functions gl_functions[] = {
             DEF_FN(LinkProgram),
             DEF_FN(PixelStorei),
             DEF_FN(ReadPixels),
+            DEF_FN(Scissor),
             DEF_FN(ShaderSource),
             DEF_FN(TexImage2D),
             DEF_FN(TexParameteri),
@@ -214,6 +215,7 @@ static const struct gl_functions gl_functions[] = {
             DEF_FN(DeleteFramebuffers),
             DEF_FN(CheckFramebufferStatus),
             DEF_FN(FramebufferTexture2D),
+            DEF_FN(GetFramebufferAttachmentParameteriv),
             {0}
         },
     },
@@ -274,6 +276,39 @@ static const struct gl_functions gl_functions[] = {
         },
     },
     {
+        .ver_core = 330,
+        .extension = "GL_ARB_timer_query",
+        .functions = (const struct gl_function[]) {
+            DEF_FN(GenQueries),
+            DEF_FN(DeleteQueries),
+            DEF_FN(BeginQuery),
+            DEF_FN(EndQuery),
+            DEF_FN(QueryCounter),
+            DEF_FN(IsQuery),
+            DEF_FN(GetQueryObjectiv),
+            DEF_FN(GetQueryObjecti64v),
+            DEF_FN(GetQueryObjectuiv),
+            DEF_FN(GetQueryObjectui64v),
+            {0}
+        },
+    },
+    {
+        .extension = "GL_EXT_disjoint_timer_query",
+        .functions = (const struct gl_function[]) {
+            DEF_FN_NAME(GenQueries, "glGenQueriesEXT"),
+            DEF_FN_NAME(DeleteQueries, "glDeleteQueriesEXT"),
+            DEF_FN_NAME(BeginQuery, "glBeginQueryEXT"),
+            DEF_FN_NAME(EndQuery, "glEndQueryEXT"),
+            DEF_FN_NAME(QueryCounter, "glQueryCounterEXT"),
+            DEF_FN_NAME(IsQuery, "glIsQueryEXT"),
+            DEF_FN_NAME(GetQueryObjectiv, "glGetQueryObjectivEXT"),
+            DEF_FN_NAME(GetQueryObjecti64v, "glGetQueryObjecti64vEXT"),
+            DEF_FN_NAME(GetQueryObjectuiv, "glGetQueryObjectuivEXT"),
+            DEF_FN_NAME(GetQueryObjectui64v, "glGetQueryObjectui64vEXT"),
+            {0}
+        },
+    },
+    {
         .ver_core = 430,
         .ver_es_core = 300,
         .functions = (const struct gl_function[]) {
@@ -315,6 +350,7 @@ static const struct gl_functions gl_functions[] = {
             DEF_FN(VDPAUInitNV),
             DEF_FN(VDPAUFiniNV),
             DEF_FN(VDPAURegisterOutputSurfaceNV),
+            DEF_FN(VDPAURegisterVideoSurfaceNV),
             DEF_FN(VDPAUUnregisterSurfaceNV),
             DEF_FN(VDPAUSurfaceAccessNV),
             DEF_FN(VDPAUMapSurfacesNV),
@@ -369,17 +405,6 @@ static const struct gl_functions gl_functions[] = {
         .extension = "GL_MP_D3D_interfaces",
         .functions = (const struct gl_function[]) {
             DEF_FN_NAME(MPGetNativeDisplay, "glMPGetD3DInterface"),
-            {0}
-        },
-    },
-    // uniform buffer object extensions, requires OpenGL 3.1.
-    {
-        .ver_core = 310,
-        .ver_es_core = 300,
-        .extension = "GL_ARB_uniform_buffer_object",
-        .functions = (const struct gl_function[]) {
-            DEF_FN(GetUniformBlockIndex),
-            DEF_FN(UniformBlockBinding),
             {0}
         },
     },
@@ -505,13 +530,15 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
             void *ptr = get_fn(fn_ctx, fn->name);
             if (!ptr) {
                 all_loaded = false;
-                mp_warn(log, "Required function '%s' not "
-                        "found for %s OpenGL %d.%d.\n", fn->name,
-                        section->extension ? section->extension : "builtin",
-                        MPGL_VER_GET_MAJOR(ver_core),
-                        MPGL_VER_GET_MINOR(ver_core));
-                if (must_exist)
+                if (must_exist) {
+                    mp_err(log, "GL %d.%d function %s not found.\n",
+                           MPGL_VER_GET_MAJOR(ver_core),
+                           MPGL_VER_GET_MINOR(ver_core), fn->name);
                     goto error;
+                } else {
+                    mp_warn(log, "Function %s from extension %s not found.\n",
+                            fn->name, section->extension);
+                }
                 break;
             }
             assert(i < MAX_FN_COUNT);

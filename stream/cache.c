@@ -124,6 +124,7 @@ enum {
     CACHE_CTRL_NONE = 0,
     CACHE_CTRL_QUIT = -1,
     CACHE_CTRL_PING = -2,
+    CACHE_CTRL_SEEK = -3,
 
     // we should fill buffer only if space>=FILL_LIMIT
     FILL_LIMIT = 16 * 1024,
@@ -132,7 +133,8 @@ enum {
 // Used by the main thread to wakeup the cache thread, and to wait for the
 // cache thread. The cache mutex has to be locked when calling this function.
 // *retry_time should be set to 0 on the first call.
-static void cache_wakeup_and_wait(struct priv *s, double *retry_time)
+// Return false if the stream has been aborted.
+static bool cache_wakeup_and_wait(struct priv *s, double *retry_time)
 {
     double start = mp_time_sec();
     if (*retry_time >= CACHE_WAIT_TIME) {
@@ -146,6 +148,8 @@ static void cache_wakeup_and_wait(struct priv *s, double *retry_time)
 
     if (*retry_time >= 0)
         *retry_time += mp_time_sec() - start;
+
+    return !mp_cancel_test(s->cache->cancel);
 }
 
 // Runs in the cache thread
@@ -200,12 +204,9 @@ static size_t read_buffer(struct priv *s, unsigned char *dst,
     return read;
 }
 
-// Runs in the cache thread.
-static void cache_fill(struct priv *s)
+static bool cache_update_stream_position(struct priv *s)
 {
     int64_t read = s->read_filepos;
-    bool read_attempted = false;
-    int len = 0;
 
     // drop cache contents only if seeking backward or too much fwd.
     // This is also done for on-disk files, since it loses the backseek cache.
@@ -221,10 +222,22 @@ static void cache_fill(struct priv *s)
     if (stream_tell(s->stream) != s->max_filepos && s->seekable) {
         MP_VERBOSE(s, "Seeking underlying stream: %"PRId64" -> %"PRId64"\n",
                    stream_tell(s->stream), s->max_filepos);
-        stream_seek(s->stream, s->max_filepos);
-        if (stream_tell(s->stream) != s->max_filepos)
-            goto done;
+        if (!stream_seek(s->stream, s->max_filepos))
+            return false;
     }
+
+    return stream_tell(s->stream) == s->max_filepos;
+}
+
+// Runs in the cache thread.
+static void cache_fill(struct priv *s)
+{
+    int64_t read = s->read_filepos;
+    bool read_attempted = false;
+    int len = 0;
+
+    if (!cache_update_stream_position(s))
+        goto done;
 
     if (!s->enable_readahead && s->read_min <= s->max_filepos)
         goto done;
@@ -312,15 +325,21 @@ static int resize_cache(struct priv *s, int64_t size)
     int64_t min_size = FILL_LIMIT * 2;
     int64_t max_size = ((size_t)-1) / 8;
 
+    if (s->stream_size > 0) {
+        size = MPMIN(size, s->stream_size);
+        if (size >= s->stream_size) {
+            MP_VERBOSE(s, "no backbuffer needed\n");
+            s->back_size = 0;
+        }
+    }
+
     int64_t buffer_size = MPCLAMP(size, min_size, max_size);
     s->back_size = MPCLAMP(s->back_size, min_size, max_size);
     buffer_size += s->back_size;
 
     unsigned char *buffer = malloc(buffer_size);
-    if (!buffer) {
-        free(buffer);
+    if (!buffer)
         return STREAM_ERROR;
-    }
 
     if (s->buffer) {
         // Copy & free the old ringbuffer data.
@@ -359,6 +378,10 @@ static int resize_cache(struct priv *s, int64_t size)
     //more data than it is allowed to fill
     if (s->seek_limit > s->buffer_size - FILL_LIMIT)
         s->seek_limit = s->buffer_size - FILL_LIMIT;
+
+    MP_VERBOSE(s, "Cache size set to %lld KiB (%lld KiB backbuffer)\n",
+               (long long)(s->buffer_size / 1024),
+               (long long)(s->back_size / 1024));
 
     assert(s->back_size < s->buffer_size);
 
@@ -496,6 +519,10 @@ static void *cache_thread(void *arg)
         }
         if (s->control > 0) {
             cache_execute_control(s);
+        } else if (s->control == CACHE_CTRL_SEEK) {
+            s->control_res = cache_update_stream_position(s);
+            s->control = CACHE_CTRL_NONE;
+            pthread_cond_signal(&s->wakeup);
         } else {
             cache_fill(s);
         }
@@ -537,9 +564,8 @@ static int cache_fill_buffer(struct stream *cache, char *buffer, int max_len)
             if (s->eof && s->read_filepos >= s->max_filepos && s->reads >= retry)
                 break;
             s->idle = false;
-            if (mp_cancel_test(s->cache->cancel))
+            if (!cache_wakeup_and_wait(s, &retry_time))
                 break;
-            cache_wakeup_and_wait(s, &retry_time);
         }
     }
 
@@ -570,6 +596,14 @@ static int cache_seek(stream_t *cache, int64_t pos)
     } else {
         cache->pos = s->read_filepos = s->read_min = pos;
         s->eof = false; // so that cache_read() will actually wait for new data
+        s->control = CACHE_CTRL_SEEK;
+        s->control_res = 0;
+        double retry = 0;
+        while (s->control != CACHE_CTRL_NONE) {
+            if (!cache_wakeup_and_wait(s, &retry))
+                break;
+        }
+        r = s->control_res;
         pthread_cond_signal(&s->wakeup);
     }
 
@@ -597,12 +631,11 @@ static int cache_control(stream_t *cache, int cmd, void *arg)
     s->control_arg = arg;
     double retry = 0;
     while (s->control != CACHE_CTRL_NONE) {
-        if (mp_cancel_test(s->cache->cancel)) {
+        if (!cache_wakeup_and_wait(s, &retry)) {
             s->eof = 1;
             r = STREAM_UNSUPPORTED;
             goto done;
         }
-        cache_wakeup_and_wait(s, &retry);
     }
     r = s->control_res;
     if (s->control_flush) {
@@ -652,21 +685,13 @@ int stream_cache_init(stream_t *cache, stream_t *stream,
     s->seek_limit = opts->seek_min * 1024ULL;
     s->back_size = opts->back_buffer * 1024ULL;
 
-    int64_t cache_size = opts->size * 1024ULL;
+    s->stream_size = stream_get_size(stream);
 
-    int64_t file_size = stream_get_size(stream);
-    if (file_size >= 0)
-        cache_size = MPMIN(cache_size, file_size);
-
-    if (resize_cache(s, cache_size) != STREAM_OK) {
+    if (resize_cache(s, opts->size * 1024ULL) != STREAM_OK) {
         MP_ERR(s, "Failed to allocate cache buffer.\n");
         talloc_free(s);
         return -1;
     }
-
-    MP_VERBOSE(cache, "Cache size set to %lld KiB (%lld KiB backbuffer)\n",
-               (long long)(s->buffer_size / 1024),
-               (long long)(s->back_size / 1024));
 
     pthread_mutex_init(&s->mutex, NULL);
     pthread_cond_init(&s->wakeup, NULL);

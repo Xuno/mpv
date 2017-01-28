@@ -28,6 +28,7 @@
 #include "options/options.h"
 #include "common/common.h"
 #include "common/encode.h"
+#include "options/m_config.h"
 #include "options/m_property.h"
 #include "common/playlist.h"
 #include "input/input.h"
@@ -36,7 +37,6 @@
 #include "osdep/terminal.h"
 #include "osdep/timer.h"
 
-#include "audio/mixer.h"
 #include "audio/decode/dec_audio.h"
 #include "audio/filter/af.h"
 #include "audio/out/ao.h"
@@ -51,26 +51,63 @@
 #include "client.h"
 #include "command.h"
 
-// Wait until mp_input_wakeup(mpctx->input) is called, since the last time
-// mp_wait_events() was called. (But see mp_process_input().)
-void mp_wait_events(struct MPContext *mpctx, double sleeptime)
+// Wait until mp_wakeup_core() is called, since the last time
+// mp_wait_events() was called.
+void mp_wait_events(struct MPContext *mpctx)
 {
-    mp_input_wait(mpctx->input, sleeptime);
+    if (mpctx->sleeptime > 0)
+        MP_STATS(mpctx, "start sleep");
+
+    mpctx->in_dispatch = true;
+
+    mp_dispatch_queue_process(mpctx->dispatch, mpctx->sleeptime);
+
+    mpctx->in_dispatch = false;
+    mpctx->sleeptime = INFINITY;
+
+    if (mpctx->sleeptime > 0)
+        MP_STATS(mpctx, "end sleep");
+}
+
+// Set the timeout used when the playloop goes to sleep. This means the
+// playloop will re-run as soon as the timeout elapses (or earlier).
+// mp_set_timeout(c, 0) is essentially equivalent to mp_wakeup_core(c).
+void mp_set_timeout(struct MPContext *mpctx, double sleeptime)
+{
+    mpctx->sleeptime = MPMIN(mpctx->sleeptime, sleeptime);
+
+    // Can't adjust timeout if called from mp_dispatch_queue_process().
+    if (mpctx->in_dispatch && isfinite(sleeptime))
+        mp_wakeup_core(mpctx);
+}
+
+// Cause the playloop to run. This can be called from any thread. If called
+// from within the playloop itself, it will be run immediately again, instead
+// of going to sleep in the next mp_wait_events().
+void mp_wakeup_core(struct MPContext *mpctx)
+{
+    mp_dispatch_interrupt(mpctx->dispatch);
+}
+
+// Opaque callback variant of mp_wakeup_core().
+void mp_wakeup_core_cb(void *ctx)
+{
+    struct MPContext *mpctx = ctx;
+    mp_wakeup_core(mpctx);
 }
 
 // Process any queued input, whether it's user input, or requests from client
 // API threads. This also resets the "wakeup" flag used with mp_wait_events().
 void mp_process_input(struct MPContext *mpctx)
 {
-    mp_dispatch_queue_process(mpctx->dispatch, 0);
     for (;;) {
         mp_cmd_t *cmd = mp_input_read_cmd(mpctx->input);
         if (!cmd)
             break;
         run_command(mpctx, cmd, NULL);
         mp_cmd_free(cmd);
-        mp_dispatch_queue_process(mpctx->dispatch, 0);
     }
+    mp_set_timeout(mpctx, mp_input_get_delay(mpctx->input));
 }
 
 double get_relative_time(struct MPContext *mpctx)
@@ -85,8 +122,7 @@ void pause_player(struct MPContext *mpctx)
 {
     mpctx->opts->pause = 1;
 
-    if (mpctx->video_out)
-        vo_control(mpctx->video_out, VOCTRL_RESTORE_SCREENSAVER, NULL);
+    update_screensaver_state(mpctx);
 
     if (mpctx->paused)
         goto end;
@@ -102,6 +138,8 @@ void pause_player(struct MPContext *mpctx)
     if (mpctx->video_out)
         vo_set_paused(mpctx->video_out, true);
 
+    mp_wakeup_core(mpctx);
+
 end:
     mp_notify(mpctx, mpctx->opts->pause ? MPV_EVENT_PAUSE : MPV_EVENT_UNPAUSE, 0);
 }
@@ -110,8 +148,7 @@ void unpause_player(struct MPContext *mpctx)
 {
     mpctx->opts->pause = 0;
 
-    if (mpctx->video_out && mpctx->opts->stop_screensaver)
-        vo_control(mpctx->video_out, VOCTRL_KILL_SCREENSAVER, NULL);
+    update_screensaver_state(mpctx);
 
     if (!mpctx->paused)
         goto end;
@@ -127,10 +164,23 @@ void unpause_player(struct MPContext *mpctx)
     if (mpctx->video_out)
         vo_set_paused(mpctx->video_out, false);
 
+    mp_wakeup_core(mpctx);
+
     (void)get_relative_time(mpctx);     // ignore time that passed during pause
 
 end:
     mp_notify(mpctx, mpctx->opts->pause ? MPV_EVENT_PAUSE : MPV_EVENT_UNPAUSE, 0);
+}
+
+void update_screensaver_state(struct MPContext *mpctx)
+{
+    if (!mpctx->video_out)
+        return;
+
+    bool saver_state = mpctx->opts->pause || !mpctx->opts->stop_screensaver ||
+                       !mpctx->playback_initialized;
+    vo_control(mpctx->video_out, saver_state ? VOCTRL_RESTORE_SCREENSAVER
+                                             : VOCTRL_KILL_SCREENSAVER, NULL);
 }
 
 void add_step_frame(struct MPContext *mpctx, int dir)
@@ -142,7 +192,7 @@ void add_step_frame(struct MPContext *mpctx, int dir)
         unpause_player(mpctx);
     } else if (dir < 0) {
         if (!mpctx->hrseek_active) {
-            queue_seek(mpctx, MPSEEK_BACKSTEP, 0, MPSEEK_VERY_EXACT, true);
+            queue_seek(mpctx, MPSEEK_BACKSTEP, 0, MPSEEK_VERY_EXACT, 0);
             pause_player(mpctx);
         }
     }
@@ -173,6 +223,7 @@ void reset_playback_state(struct MPContext *mpctx)
     mpctx->last_seek_pts = MP_NOPTS_VALUE;
     mpctx->cache_wait_time = 0;
     mpctx->step_frames = 0;
+    mpctx->ab_loop_clip = true;
     mpctx->restart_complete = false;
 
 #if HAVE_ENCODING
@@ -180,21 +231,23 @@ void reset_playback_state(struct MPContext *mpctx)
 #endif
 }
 
-// return -1 if seek failed (non-seekable stream?), 0 otherwise
-static int mp_seek(MPContext *mpctx, struct seek_params seek)
+static void mp_seek(MPContext *mpctx, struct seek_params seek)
 {
     struct MPOpts *opts = mpctx->opts;
 
     if (!mpctx->demuxer || seek.type == MPSEEK_NONE || seek.amount == MP_NOPTS_VALUE)
-        return -1;
+        return;
 
     if (!mpctx->demuxer->seekable) {
-        MP_ERR(mpctx, "Can't seek in this file.\n");
-        return -1;
+        MP_ERR(mpctx, "Cannot seek in this file.\n");
+        MP_ERR(mpctx, "You can forcibly enable it with '--force-seekable=yes'.\n");
+        return;
     }
 
     bool hr_seek_very_exact = seek.exact == MPSEEK_VERY_EXACT;
     double current_time = get_current_time(mpctx);
+    if (current_time == MP_NOPTS_VALUE && seek.type == MPSEEK_RELATIVE)
+        return;
     if (current_time == MP_NOPTS_VALUE)
         current_time = 0;
     double seek_pts = MP_NOPTS_VALUE;
@@ -248,6 +301,12 @@ static int mp_seek(MPContext *mpctx, struct seek_params seek)
         // The value is arbitrary, but should be "good enough" in most situations.
         if (hr_seek_very_exact)
             hr_seek_offset = MPMAX(hr_seek_offset, 0.5); // arbitrary
+        for (int n = 0; n < mpctx->num_tracks; n++) {
+            double offset = 0;
+            if (!mpctx->tracks[n]->is_external)
+                offset += get_track_seek_offset(mpctx, mpctx->tracks[n]);
+            hr_seek_offset = MPMAX(hr_seek_offset, -offset);
+        }
         demux_pts -= hr_seek_offset;
         demux_flags = (demux_flags | SEEK_HR | SEEK_BACKWARD) & ~SEEK_FORWARD;
     }
@@ -259,13 +318,17 @@ static int mp_seek(MPContext *mpctx, struct seek_params seek)
         struct track *track = mpctx->tracks[t];
         if (track->selected && track->is_external && track->demuxer) {
             double main_new_pos = demux_pts;
+            if (!hr_seek || track->is_external)
+                main_new_pos += get_track_seek_offset(mpctx, track);
             if (demux_flags & SEEK_FACTOR)
                 main_new_pos = seek_pts;
             demux_seek(track->demuxer, main_new_pos, 0);
         }
     }
 
-    clear_audio_output_buffers(mpctx);
+    if (!(seek.flags & MPSEEK_FLAG_NOFLUSH))
+        clear_audio_output_buffers(mpctx);
+
     reset_playback_state(mpctx);
 
     /* Use the target time as "current position" for further relative
@@ -287,26 +350,31 @@ static int mp_seek(MPContext *mpctx, struct seek_params seek)
         mpctx->stop_play = KEEP_PLAYING;
 
     mpctx->start_timestamp = mp_time_sec();
-    mpctx->sleeptime = 0;
+    mp_wakeup_core(mpctx);
 
     mp_notify(mpctx, MPV_EVENT_SEEK, NULL);
     mp_notify(mpctx, MPV_EVENT_TICK, NULL);
 
-    return 0;
+    mpctx->audio_allow_second_chance_seek =
+        !hr_seek && !(demux_flags & SEEK_FORWARD);
+
+    mpctx->ab_loop_clip = mpctx->last_seek_pts < opts->ab_loop[1];
 }
 
 // This combines consecutive seek requests.
 void queue_seek(struct MPContext *mpctx, enum seek_type type, double amount,
-                enum seek_precision exact, bool immediate)
+                enum seek_precision exact, int flags)
 {
     struct seek_params *seek = &mpctx->seek;
+
+    mp_wakeup_core(mpctx);
 
     if (mpctx->stop_play == AT_END_OF_FILE)
         mpctx->stop_play = KEEP_PLAYING;
 
     switch (type) {
     case MPSEEK_RELATIVE:
-        seek->immediate |= immediate;
+        seek->flags |= flags;
         if (seek->type == MPSEEK_FACTOR)
             return;  // Well... not common enough to bother doing better
         seek->amount += amount;
@@ -324,7 +392,7 @@ void queue_seek(struct MPContext *mpctx, enum seek_type type, double amount,
             .type = type,
             .amount = amount,
             .exact = exact,
-            .immediate = immediate,
+            .flags = flags,
         };
         return;
     case MPSEEK_NONE:
@@ -343,7 +411,8 @@ void execute_queued_seek(struct MPContext *mpctx)
         /* If the user seeks continuously (keeps arrow key down)
          * try to finish showing a frame from one location before doing
          * another seek (which could lead to unchanging display). */
-        if (!mpctx->seek.immediate && mpctx->video_status < STATUS_PLAYING &&
+        bool delay = mpctx->seek.flags & MPSEEK_FLAG_DELAY;
+        if (delay && mpctx->video_status < STATUS_PLAYING &&
             mp_time_sec() - mpctx->start_timestamp < 0.3)
             return;
         mp_seek(mpctx, mpctx->seek);
@@ -506,7 +575,7 @@ static void handle_osd_redraw(struct MPContext *mpctx)
     // Don't redraw immediately during a seek (makes it significantly slower).
     bool use_video = mpctx->vo_chain && !mpctx->vo_chain->is_coverart;
     if (use_video && mp_time_sec() - mpctx->start_timestamp < 0.1) {
-        mpctx->sleeptime = MPMIN(mpctx->sleeptime, 0.1);
+        mp_set_timeout(mpctx, 0.1);
         return;
     }
     bool want_redraw = osd_query_and_reset_want_redraw(mpctx->osd) ||
@@ -514,7 +583,7 @@ static void handle_osd_redraw(struct MPContext *mpctx)
     if (!want_redraw)
         return;
     vo_redraw(mpctx->video_out);
-    mpctx->sleeptime = 0;
+    mp_wakeup_core(mpctx);
 }
 
 static void handle_pause_on_low_cache(struct MPContext *mpctx)
@@ -536,8 +605,8 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
 
     if (mpctx->restart_complete && c.size > 0) {
         if (mpctx->paused && mpctx->paused_for_cache) {
-            if (!opts->cache_pausing || s.ts_duration >= mpctx->cache_wait_time
-                || s.idle)
+            if (!s.underrun && (!opts->cache_pausing || s.idle ||
+                                s.ts_duration >= mpctx->cache_wait_time))
             {
                 double elapsed_time = now - mpctx->cache_stop_time;
                 if (elapsed_time > mpctx->cache_wait_time) {
@@ -550,7 +619,7 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
                     unpause_player(mpctx);
                 force_update = true;
             }
-            mpctx->sleeptime = MPMIN(mpctx->sleeptime, 0.2);
+            mp_set_timeout(mpctx, 0.2);
         } else {
             if (opts->cache_pausing && s.underrun) {
                 bool prev_paused_user = opts->pause;
@@ -575,10 +644,8 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
             mpctx->next_cache_update = busy ? now + 0.25 : 0;
             force_update = true;
         }
-        if (mpctx->next_cache_update > 0) {
-            mpctx->sleeptime =
-                MPMIN(mpctx->sleeptime, mpctx->next_cache_update - now);
-        }
+        if (mpctx->next_cache_update > 0)
+            mp_set_timeout(mpctx, mpctx->next_cache_update - now);
     }
 
     if (mpctx->cache_buffer != cache_buffer) {
@@ -596,6 +663,9 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
         force_update = true;
     }
 
+    if (s.eof && !busy)
+        prefetch_next(mpctx);
+
     if (force_update)
         mp_notify(mpctx, MP_EVENT_CACHE_UPDATE, NULL);
 }
@@ -612,9 +682,9 @@ static void handle_heartbeat_cmd(struct MPContext *mpctx)
         double now = mp_time_sec();
         if (mpctx->next_heartbeat <= now) {
             mpctx->next_heartbeat = now + opts->heartbeat_interval;
-            system(opts->heartbeat_cmd);
+            (void)system(opts->heartbeat_cmd);
         }
-        mpctx->sleeptime = MPMIN(mpctx->sleeptime, mpctx->next_heartbeat - now);
+        mp_set_timeout(mpctx, mpctx->next_heartbeat - now);
     }
 }
 
@@ -637,7 +707,7 @@ static void handle_cursor_autohide(struct MPContext *mpctx)
     }
 
     if (mpctx->mouse_timer > now) {
-        mpctx->sleeptime = MPMIN(mpctx->sleeptime, mpctx->mouse_timer - now);
+        mp_set_timeout(mpctx, mpctx->mouse_timer - now);
     } else {
         mouse_cursor_visible = false;
     }
@@ -648,7 +718,7 @@ static void handle_cursor_autohide(struct MPContext *mpctx)
     if (opts->cursor_autohide_delay == -2)
         mouse_cursor_visible = false;
 
-    if (opts->cursor_autohide_fs && !opts->vo.fullscreen)
+    if (opts->cursor_autohide_fs && !opts->vo->fullscreen)
         mouse_cursor_visible = true;
 
     if (mouse_cursor_visible != mpctx->mouse_cursor_visible)
@@ -664,6 +734,14 @@ static void handle_vo_events(struct MPContext *mpctx)
         mp_notify(mpctx, MP_EVENT_WIN_RESIZE, NULL);
     if (events & VO_EVENT_WIN_STATE)
         mp_notify(mpctx, MP_EVENT_WIN_STATE, NULL);
+    if (events & VO_EVENT_FULLSCREEN_STATE) {
+        // The only purpose of this is to update the fullscreen flag on the
+        // playloop side if it changes "from outside" on the VO.
+        int fs = mpctx->opts->vo->fullscreen;
+        vo_control(vo, VOCTRL_GET_FULLSCREEN, &fs);
+        m_config_set_option_raw_direct(mpctx->mconfig,
+            m_config_get_co(mpctx->mconfig, bstr0("fullscreen")), &fs, 0);
+    }
 }
 
 static void handle_sstep(struct MPContext *mpctx)
@@ -674,7 +752,7 @@ static void handle_sstep(struct MPContext *mpctx)
 
     if (opts->step_sec > 0 && !mpctx->paused) {
         set_osd_function(mpctx, OSD_FFW);
-        queue_seek(mpctx, MPSEEK_RELATIVE, opts->step_sec, MPSEEK_DEFAULT, true);
+        queue_seek(mpctx, MPSEEK_RELATIVE, opts->step_sec, MPSEEK_DEFAULT, 0);
     }
 
     if (mpctx->video_status >= STATUS_EOF) {
@@ -688,10 +766,25 @@ static void handle_sstep(struct MPContext *mpctx)
 static void handle_loop_file(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
+
+    if (mpctx->stop_play == AT_END_OF_FILE &&
+        (opts->ab_loop[0] != MP_NOPTS_VALUE || opts->ab_loop[1] != MP_NOPTS_VALUE))
+    {
+        // Assumes execute_queued_seek() happens before next audio/video is
+        // attempted to be decoded or filtered.
+        mpctx->stop_play = KEEP_PLAYING;
+        double start = 0;
+        if (opts->ab_loop[0] != MP_NOPTS_VALUE)
+            start = opts->ab_loop[0];
+        mark_seek(mpctx);
+        queue_seek(mpctx, MPSEEK_ABSOLUTE, start, MPSEEK_EXACT,
+                   MPSEEK_FLAG_NOFLUSH);
+    }
+
     if (opts->loop_file && mpctx->stop_play == AT_END_OF_FILE) {
         mpctx->stop_play = KEEP_PLAYING;
         set_osd_function(mpctx, OSD_FFW);
-        queue_seek(mpctx, MPSEEK_ABSOLUTE, 0, MPSEEK_DEFAULT, true);
+        queue_seek(mpctx, MPSEEK_ABSOLUTE, 0, MPSEEK_DEFAULT, MPSEEK_FLAG_NOFLUSH);
         if (opts->loop_file > 0)
             opts->loop_file--;
     }
@@ -784,6 +877,9 @@ int handle_force_window(struct MPContext *mpctx, bool force)
             .input_ctx = mpctx->input,
             .osd = mpctx->osd,
             .encode_lavc_ctx = mpctx->encode_lavc_ctx,
+            .opengl_cb_context = mpctx->gl_cb_ctx,
+            .wakeup_cb = mp_wakeup_core_cb,
+            .wakeup_ctx = mpctx,
         };
         mpctx->video_out = init_best_video_out(mpctx->global, &ex);
         if (!mpctx->video_out)
@@ -812,7 +908,7 @@ int handle_force_window(struct MPContext *mpctx, bool force)
         };
         if (vo_reconfig(vo, &p) < 0)
             goto err;
-        vo_control(vo, VOCTRL_RESTORE_SCREENSAVER, NULL);
+        update_screensaver_state(mpctx);
         vo_set_paused(vo, true);
         vo_redraw(vo);
         mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
@@ -866,7 +962,7 @@ static void handle_playback_restart(struct MPContext *mpctx)
     if (mpctx->video_status == STATUS_READY) {
         mpctx->video_status = STATUS_PLAYING;
         get_relative_time(mpctx);
-        mpctx->sleeptime = 0;
+        mp_wakeup_core(mpctx);
     }
 
     if (mpctx->audio_status == STATUS_READY) {
@@ -884,6 +980,8 @@ static void handle_playback_restart(struct MPContext *mpctx)
     if (!mpctx->restart_complete) {
         mpctx->hrseek_active = false;
         mpctx->restart_complete = true;
+        mpctx->audio_allow_second_chance_seek = false;
+        handle_playback_time(mpctx);
         mp_notify(mpctx, MPV_EVENT_PLAYBACK_RESTART, NULL);
         if (!mpctx->playing_msg_shown) {
             if (opts->playing_msg && opts->playing_msg[0]) {
@@ -902,7 +1000,8 @@ static void handle_playback_restart(struct MPContext *mpctx)
             }
         }
         mpctx->playing_msg_shown = true;
-        mpctx->sleeptime = 0;
+        mp_wakeup_core(mpctx);
+        mpctx->ab_loop_clip = mpctx->playback_pts < opts->ab_loop[1];
         MP_VERBOSE(mpctx, "playback restart complete\n");
     }
 }
@@ -981,7 +1080,7 @@ void run_playloop(struct MPContext *mpctx)
 
     if (mpctx->lavfi) {
         if (lavfi_process(mpctx->lavfi))
-            mpctx->sleeptime = 0;
+            mp_wakeup_core(mpctx);
         if (lavfi_has_failed(mpctx->lavfi))
             mpctx->stop_play = AT_END_OF_FILE;
     }
@@ -996,14 +1095,12 @@ void run_playloop(struct MPContext *mpctx)
     handle_dummy_ticks(mpctx);
 
     update_osd_msg(mpctx);
-    if (!mpctx->video_out)
+    if (mpctx->video_status == STATUS_EOF)
         update_subtitles(mpctx, mpctx->playback_pts);
 
     handle_eof(mpctx);
 
     handle_loop_file(mpctx);
-
-    handle_ab_loop(mpctx);
 
     handle_keep_open(mpctx);
 
@@ -1017,8 +1114,7 @@ void run_playloop(struct MPContext *mpctx)
 
     handle_osd_redraw(mpctx);
 
-    mp_wait_events(mpctx, mpctx->sleeptime);
-    mpctx->sleeptime = 1e9; // infinite for all practical purposes
+    mp_wait_events(mpctx);
 
     handle_pause_on_low_cache(mpctx);
 
@@ -1034,8 +1130,7 @@ void run_playloop(struct MPContext *mpctx)
 void mp_idle(struct MPContext *mpctx)
 {
     handle_dummy_ticks(mpctx);
-    mp_wait_events(mpctx, mpctx->sleeptime);
-    mpctx->sleeptime = 100.0;
+    mp_wait_events(mpctx);
     mp_process_input(mpctx);
     handle_command_updates(mpctx);
     handle_cursor_autohide(mpctx);
@@ -1055,7 +1150,7 @@ void idle_loop(struct MPContext *mpctx)
         if (need_reinit) {
             uninit_audio_out(mpctx);
             handle_force_window(mpctx, true);
-            mpctx->sleeptime = 0;
+            mp_wakeup_core(mpctx);
             mp_notify(mpctx, MPV_EVENT_IDLE, NULL);
             need_reinit = false;
         }

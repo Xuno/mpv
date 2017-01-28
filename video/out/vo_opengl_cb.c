@@ -47,13 +47,7 @@
  */
 
 struct vo_priv {
-    struct vo *vo;
-
     struct mpv_opengl_cb_context *ctx;
-
-    // Immutable after VO init
-    int use_gl_debug;
-    struct gl_video_opts *renderer_opts;
 };
 
 struct mpv_opengl_cb_context {
@@ -80,14 +74,10 @@ struct mpv_opengl_cb_context {
     bool flip;
     bool force_update;
     bool imgfmt_supported[IMGFMT_END - IMGFMT_START];
-    struct mp_vo_opts vo_opts;
     bool update_new_opts;
-    struct vo_priv *new_opts; // use these options, instead of the VO ones
-    struct m_config *new_opts_cfg;
     bool eq_changed;
     struct mp_csp_equalizer eq;
     struct vo *active;
-    int hwdec_api;
 
     // --- This is only mutable while initialized=false, during which nothing
     //     except the OpenGL context manager is allowed to access it.
@@ -99,6 +89,8 @@ struct mpv_opengl_cb_context {
     GL *gl;
     struct gl_video *renderer;
     struct gl_hwdec *hwdec;
+    struct m_config_cache *vo_opts_cache;
+    struct mp_vo_opts *vo_opts;
 };
 
 static void update(struct vo_priv *p);
@@ -136,26 +128,10 @@ struct mpv_opengl_cb_context *mp_opengl_create(struct mpv_global *g,
     ctx->log = mp_log_new(ctx, g->log, "opengl-cb");
     ctx->client_api = client_api;
 
-    ctx->hwdec_api = g->opts->vo.hwdec_preload_api;
-    if (ctx->hwdec_api == HWDEC_NONE)
-        ctx->hwdec_api = g->opts->hwdec_api;
+    ctx->vo_opts_cache = m_config_cache_alloc(ctx, ctx->global, &vo_sub_opts);
+    ctx->vo_opts = ctx->vo_opts_cache->opts;
 
     return ctx;
-}
-
-// To be called from VO thread, with p->ctx->lock held.
-static void copy_vo_opts(struct vo *vo)
-{
-    struct vo_priv *p = vo->priv;
-
-    // We're being lazy: none of the options we need use dynamic data, so
-    // copy the struct with an assignment.
-    // Just remove all the dynamic data to avoid confusion.
-    struct mp_vo_opts opts = *vo->opts;
-    opts.video_driver_list = opts.vo_defs = NULL;
-    opts.winname = NULL;
-    opts.sws_opts = NULL;
-    p->ctx->vo_opts = opts;
 }
 
 void mpv_opengl_cb_set_update_callback(struct mpv_opengl_cb_context *ctx,
@@ -175,17 +151,25 @@ int mpv_opengl_cb_init_gl(struct mpv_opengl_cb_context *ctx, const char *exts,
     if (ctx->renderer)
         return MPV_ERROR_INVALID_PARAMETER;
 
+    talloc_free(ctx->gl);
     ctx->gl = talloc_zero(ctx, GL);
 
     mpgl_load_functions2(ctx->gl, get_proc_address, get_proc_address_ctx,
                          exts, ctx->log);
+    if (!ctx->gl->version && !ctx->gl->es) {
+        MP_FATAL(ctx, "OpenGL not initialized.\n");
+        return MPV_ERROR_UNSUPPORTED;
+    }
+
     ctx->renderer = gl_video_init(ctx->gl, ctx->log, ctx->global);
     if (!ctx->renderer)
         return MPV_ERROR_UNSUPPORTED;
 
+    m_config_cache_update(ctx->vo_opts_cache);
+
     ctx->hwdec_devs = hwdec_devices_create();
-    ctx->hwdec = gl_hwdec_load_api(ctx->log, ctx->gl, ctx->global,
-                                   ctx->hwdec_devs, ctx->hwdec_api);
+    ctx->hwdec = gl_hwdec_load(ctx->log, ctx->gl, ctx->global,
+                               ctx->hwdec_devs, ctx->vo_opts->gl_hwdec_interop);
     gl_video_set_hwdec(ctx->renderer, ctx->hwdec);
 
     pthread_mutex_lock(&ctx->lock);
@@ -206,6 +190,9 @@ int mpv_opengl_cb_init_gl(struct mpv_opengl_cb_context *ctx, const char *exts,
 
 int mpv_opengl_cb_uninit_gl(struct mpv_opengl_cb_context *ctx)
 {
+    if (!ctx)
+        return 0;
+
     // Bring down the decoder etc., which still might be using the hwdec
     // context. Setting initialized=false guarantees it can't come back.
 
@@ -228,9 +215,6 @@ int mpv_opengl_cb_uninit_gl(struct mpv_opengl_cb_context *ctx)
     ctx->hwdec_devs = NULL;
     talloc_free(ctx->gl);
     ctx->gl = NULL;
-    talloc_free(ctx->new_opts_cfg);
-    ctx->new_opts = NULL;
-    ctx->new_opts_cfg = NULL;
     return 0;
 }
 
@@ -254,9 +238,11 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
         ctx->vp_w = vp_w;
         ctx->vp_h = vp_h;
 
+        m_config_cache_update(ctx->vo_opts_cache);
+
         struct mp_rect src, dst;
         struct mp_osd_res osd;
-        mp_get_src_dst_rects(ctx->log, &ctx->vo_opts, vo->driver->caps,
+        mp_get_src_dst_rects(ctx->log, ctx->vo_opts, vo->driver->caps,
                              &ctx->img_params, vp_w, abs(vp_h),
                              1.0, &src, &dst, &osd);
 
@@ -269,15 +255,16 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
         ctx->eq_changed = true;
     }
     if (ctx->update_new_opts) {
-        struct vo_priv *p = vo ? vo->priv : NULL;
-        struct vo_priv *opts = ctx->new_opts ? ctx->new_opts : p;
-        if (opts) {
-            gl_video_set_options(ctx->renderer, opts->renderer_opts);
-            if (vo)
-                gl_video_configure_queue(ctx->renderer, vo);
-            ctx->gl->debug_context = opts->use_gl_debug;
-            gl_video_set_debug(ctx->renderer, opts->use_gl_debug);
-        }
+        gl_video_update_options(ctx->renderer);
+        if (vo)
+            gl_video_configure_queue(ctx->renderer, vo);
+        int debug;
+        mp_read_option_raw(ctx->global, "opengl-debug", &m_option_type_flag,
+                           &debug);
+        ctx->gl->debug_context = debug;
+        gl_video_set_debug(ctx->renderer, debug);
+        if (gl_video_icc_auto_enabled(ctx->renderer))
+            MP_ERR(ctx, "icc-profile-auto is not available with opengl-cb\n");
     }
     ctx->reconfigured = false;
     ctx->update_new_opts = false;
@@ -300,7 +287,8 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
     int64_t wait_present_count = ctx->present_count;
     if (frame) {
         ctx->next_frame = NULL;
-        wait_present_count += 1;
+        if (!(frame->redraw || !frame->current))
+            wait_present_count += 1;
         pthread_cond_signal(&ctx->wakeup);
         talloc_free(ctx->cur_frame);
         ctx->cur_frame = vo_frame_ref(frame);
@@ -374,8 +362,10 @@ static void flip_page(struct vo *vo)
     // Wait until frame was rendered
     while (p->ctx->next_frame) {
         if (pthread_cond_timedwait(&p->ctx->wakeup, &p->ctx->lock, &ts)) {
-            MP_VERBOSE(vo, "mpv_opengl_cb_draw() not being called or stuck.\n");
-            goto done;
+            if (p->ctx->next_frame) {
+                MP_VERBOSE(vo, "mpv_opengl_cb_draw() not being called or stuck.\n");
+                goto done;
+            }
         }
     }
 
@@ -402,7 +392,8 @@ done:
 
     // Cleanup after the API user is not reacting, or is being unusually slow.
     if (p->ctx->next_frame) {
-        talloc_free(p->ctx->next_frame);
+        talloc_free(p->ctx->cur_frame);
+        p->ctx->cur_frame = p->ctx->next_frame;
         p->ctx->next_frame = NULL;
         p->ctx->present_count += 2;
         pthread_cond_signal(&p->ctx->wakeup);
@@ -437,41 +428,6 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
     return 0;
 }
 
-// list of options which can be changed at runtime
-#define OPT_BASE_STRUCT struct vo_priv
-static const struct m_option change_opts[] = {
-    OPT_FLAG("debug", use_gl_debug, 0),
-    OPT_SUBSTRUCT("", renderer_opts, gl_video_conf, 0),
-    {0}
-};
-#undef OPT_BASE_STRUCT
-
-static bool reparse_cmdline(struct vo_priv *p, char *args)
-{
-    struct m_config *cfg = NULL;
-    struct vo_priv *opts = NULL;
-    int r = 0;
-
-    pthread_mutex_lock(&p->ctx->lock);
-    const struct vo_priv *vodef = p->vo->driver->priv_defaults;
-    cfg = m_config_new(NULL, p->vo->log, sizeof(*opts), vodef, change_opts);
-    opts = cfg->optstruct;
-    r = m_config_parse_suboptions(cfg, "opengl-cb", args);
-
-    if (r >= 0) {
-        talloc_free(p->ctx->new_opts_cfg);
-        p->ctx->new_opts = opts;
-        p->ctx->new_opts_cfg = cfg;
-        p->ctx->update_new_opts = true;
-        cfg = NULL;
-        update(p);
-    }
-
-    talloc_free(cfg);
-    pthread_mutex_unlock(&p->ctx->lock);
-    return r >= 0;
-}
-
 static int control(struct vo *vo, uint32_t request, void *data)
 {
     struct vo_priv *p = vo->priv;
@@ -486,8 +442,6 @@ static int control(struct vo *vo, uint32_t request, void *data)
     case VOCTRL_PAUSE:
         vo->want_redraw = true;
         vo_wakeup(vo);
-        return VO_TRUE;
-    case VOCTRL_GET_PANSCAN:
         return VO_TRUE;
     case VOCTRL_GET_EQUALIZER: {
         struct voctrl_get_equalizer_args *args = data;
@@ -509,15 +463,16 @@ static int control(struct vo *vo, uint32_t request, void *data)
     }
     case VOCTRL_SET_PANSCAN:
         pthread_mutex_lock(&p->ctx->lock);
-        copy_vo_opts(vo);
         p->ctx->force_update = true;
         update(p);
         pthread_mutex_unlock(&p->ctx->lock);
         return VO_TRUE;
-    case VOCTRL_SET_COMMAND_LINE: {
-        char *arg = data;
-        return reparse_cmdline(p, arg);
-    }
+    case VOCTRL_UPDATE_RENDER_OPTS:
+        pthread_mutex_lock(&p->ctx->lock);
+        p->ctx->update_new_opts = true;
+        update(p);
+        pthread_mutex_unlock(&p->ctx->lock);
+        return VO_TRUE;
     }
 
     return VO_NOTIMPL;
@@ -539,7 +494,6 @@ static void uninit(struct vo *vo)
 static int preinit(struct vo *vo)
 {
     struct vo_priv *p = vo->priv;
-    p->vo = vo;
     p->ctx = vo->extra.opengl_cb_context;
     if (!p->ctx) {
         MP_FATAL(vo, "No context set.\n");
@@ -555,7 +509,6 @@ static int preinit(struct vo *vo)
     p->ctx->active = vo;
     p->ctx->reconfigured = true;
     p->ctx->update_new_opts = true;
-    copy_vo_opts(vo);
     memset(p->ctx->eq.values, 0, sizeof(p->ctx->eq.values));
     p->ctx->eq_changed = true;
     pthread_mutex_unlock(&p->ctx->lock);
@@ -564,13 +517,6 @@ static int preinit(struct vo *vo)
 
     return 0;
 }
-
-#define OPT_BASE_STRUCT struct vo_priv
-static const struct m_option options[] = {
-    OPT_FLAG("debug", use_gl_debug, 0),
-    OPT_SUBSTRUCT("", renderer_opts, gl_video_conf, 0),
-    {0},
-};
 
 const struct vo_driver video_out_opengl_cb = {
     .description = "OpenGL Callbacks for libmpv",
@@ -584,5 +530,4 @@ const struct vo_driver video_out_opengl_cb = {
     .flip_page = flip_page,
     .uninit = uninit,
     .priv_size = sizeof(struct vo_priv),
-    .options = options,
 };

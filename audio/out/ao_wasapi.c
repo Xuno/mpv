@@ -132,7 +132,7 @@ static bool thread_feed(struct ao *ao)
                  mp_time_us() + (int64_t)llrint(delay_us));
 
     // note, we can't use ao_read_data return value here since we already
-    // commited to frame_count above in the GetBuffer call
+    // committed to frame_count above in the GetBuffer call
     hr = IAudioRenderClient_ReleaseBuffer(state->pRenderClient,
                                           frame_count, 0);
     EXIT_ON_ERROR(hr);
@@ -270,10 +270,12 @@ static void uninit(struct ao *ao)
 static int init(struct ao *ao)
 {
     MP_DBG(ao, "Init wasapi\n");
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
     struct wasapi_state *state = ao->priv;
     state->log = ao->log;
+
+    state->opt_exclusive |= ao->init_flags & AO_INIT_EXCLUSIVE;
 
     state->deviceID = wasapi_find_deviceID(ao);
     if (!state->deviceID) {
@@ -469,7 +471,7 @@ static int hotplug_init(struct ao *ao)
     MP_DBG(ao, "Hotplug init\n");
     struct wasapi_state *state = ao->priv;
     state->log = ao->log;
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
     HRESULT hr = wasapi_change_init(ao, true);
     EXIT_ON_ERROR(hr);
 
@@ -494,9 +496,4 @@ const struct ao_driver audio_out_wasapi = {
     .hotplug_init   = hotplug_init,
     .hotplug_uninit = hotplug_uninit,
     .priv_size      = sizeof(wasapi_state),
-    .options        = (const struct m_option[]) {
-        OPT_FLAG("exclusive", opt_exclusive, 0),
-        OPT_STRING("device", opt_device, 0),
-        {NULL},
-    },
 };

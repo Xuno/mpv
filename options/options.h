@@ -7,9 +7,10 @@
 #include "common/common.h"
 
 typedef struct mp_vo_opts {
-    struct m_obj_settings *video_driver_list, *vo_defs;
+    struct m_obj_settings *video_driver_list;
 
     int taskbar_progress;
+    int snap_window;
     int ontop;
     int fullscreen;
     int border;
@@ -18,7 +19,6 @@ typedef struct mp_vo_opts {
 
     int screen_id;
     int fsscreen_id;
-    int fs_black_out_screens;
     char *winname;
     int x11_netwm;
     int x11_bypass_compositor;
@@ -34,10 +34,11 @@ typedef struct mp_vo_opts {
     struct m_geometry autofit;
     struct m_geometry autofit_larger;
     struct m_geometry autofit_smaller;
-    float window_scale;
+    double window_scale;
 
     int keepaspect;
     int keepaspect_window;
+    int hidpi_window_scale;
 
     int64_t WinID;
 
@@ -50,7 +51,10 @@ typedef struct mp_vo_opts {
     // vo_wayland, vo_drm
     struct sws_opts *sws_opts;
     // vo_opengl, vo_opengl_cb
-    int hwdec_preload_api;
+    char *gl_hwdec_interop;
+    // vo_drm
+    char *drm_connector_spec;
+    int drm_mode_id;
 } mp_vo_opts;
 
 struct mp_cache_opts {
@@ -64,6 +68,7 @@ struct mp_cache_opts {
 };
 
 typedef struct MPOpts {
+    int property_print_help;
     int use_terminal;
     char *dump_stats;
     int verbose;
@@ -72,6 +77,8 @@ typedef struct MPOpts {
     int msg_module;
     int msg_time;
     char *log_file;
+
+    int operation_mode;
 
     char **reset_options;
     char **script_files;
@@ -83,21 +90,23 @@ typedef struct MPOpts {
 
     int auto_load_scripts;
 
-    struct m_obj_settings *audio_driver_list, *ao_defs;
+    struct m_obj_settings *audio_driver_list;
     char *audio_device;
+    int audio_exclusive;
     char *audio_client_name;
     int ao_null_fallback;
+    int audio_stream_silence;
+    float audio_wait_open;
     int force_vo;
     int softvol;
-    float mixer_init_volume;
-    int mixer_init_mute;
-    char *mixer_restore_volume_data;
+    float softvol_volume;
+    float balance;
+    int softvol_mute;
     float softvol_max;
     int gapless_audio;
     double audio_buffer;
 
-    mp_vo_opts vo;
-    int allow_win_drag;
+    mp_vo_opts *vo;
 
     char *wintitle;
     char *media_title;
@@ -125,8 +134,9 @@ typedef struct MPOpts {
     int osd_level;
     int osd_duration;
     int osd_fractions;
+    int video_osd;
+
     int untimed;
-    char *stream_capture;
     char *stream_dump;
     int stop_playback_on_init_failure;
     int loop_times;
@@ -143,9 +153,8 @@ typedef struct MPOpts {
     int load_config;
     char *force_configdir;
     int use_filedir_conf;
-    int network_rtsp_transport;
     int hls_bitrate;
-    struct mp_cache_opts stream_cache;
+    struct mp_cache_opts *stream_cache;
     int chapterrange[2];
     int edition_id;
     int correct_pts;
@@ -186,8 +195,10 @@ typedef struct MPOpts {
     int position_save_on_quit;
     int write_filename_in_watch_later_config;
     int ignore_path_in_watch_later_config;
+    char *watch_later_directory;
     int pause;
     int keep_open;
+    double image_display_duration;
     char *lavfi_complex;
     int stream_id[2][STREAM_TYPE_COUNT];
     int stream_id_ff[STREAM_TYPE_COUNT];
@@ -202,21 +213,17 @@ typedef struct MPOpts {
     int forced_subs_only;
     int stretch_dvd_subs;
     int stretch_image_subs;
+    int image_subs_video_res;
 
     int sub_fix_timing;
-    char *sub_cp;
 
     char **audio_files;
     char *demuxer_name;
-    int demuxer_max_packs;
-    int demuxer_max_bytes;
     int demuxer_thread;
-    double demuxer_min_secs;
+    int prefetch_open;
     char *audio_demuxer_name;
     char *sub_demuxer_name;
-    int force_seekable;
 
-    double demuxer_min_secs_cache;
     int cache_pausing;
 
     struct image_writer_opts *screenshot_image_opts;
@@ -226,7 +233,7 @@ typedef struct MPOpts {
     double force_fps;
     int index_mode;
 
-    struct mp_chmap audio_output_channels;
+    struct m_channels audio_output_channels;
     int audio_output_format;
     int audio_normalize;
     int force_srate;
@@ -243,6 +250,7 @@ typedef struct MPOpts {
     char **sub_paths;
     char **audiofile_paths;
     char **external_files;
+    int autoload_files;
     int sub_auto;
     int audiofile_auto;
     int osd_bar_visible;
@@ -256,7 +264,7 @@ typedef struct MPOpts {
     int sub_scale_with_window;
     int ass_scale_with_window;
     struct osd_style_opts *osd_style;
-    struct osd_style_opts *sub_text_style;
+    struct osd_style_opts *sub_style;
     float sub_scale;
     float sub_gauss;
     int sub_gray;
@@ -274,23 +282,13 @@ typedef struct MPOpts {
     int ass_hinting;
     int ass_shaper;
     int sub_clear_on_seek;
+    int teletext_page;
 
     int hwdec_api;
     char *hwdec_codecs;
     int videotoolbox_format;
 
     int w32_priority;
-
-    int network_cookies_enabled;
-    char *network_cookies_file;
-    char *network_useragent;
-    char *network_referrer;
-    char **network_http_header_fields;
-    int network_tls_verify;
-    char *network_tls_ca_file;
-    char *network_tls_cert_file;
-    char *network_tls_key_file;
-    double network_timeout;
 
     struct tv_params *tv_params;
     struct pvr_params *stream_pvr_opts;
@@ -299,11 +297,6 @@ typedef struct MPOpts {
     struct stream_lavf_params *stream_lavf_opts;
 
     char *cdrom_device;
-    int dvd_title;
-    int dvd_angle;
-    int dvd_speed;
-    char *dvd_device;
-    int bluray_angle;
     char *bluray_device;
 
     double mf_fps;
@@ -313,6 +306,8 @@ typedef struct MPOpts {
     struct demux_rawvideo_opts *demux_rawvideo;
     struct demux_lavf_opts *demux_lavf;
     struct demux_mkv_opts *demux_mkv;
+
+    struct demux_opts *demux_opts;
 
     struct vd_lavc_params *vd_lavc_params;
     struct ad_lavc_params *ad_lavc_params;
@@ -324,9 +319,24 @@ typedef struct MPOpts {
 
     char *ipc_path;
     char *input_file;
+
+    int wingl_dwm_flush;
+
+    struct gl_video_opts *gl_video_opts;
+    struct angle_opts *angle_opts;
+    struct dvd_opts *dvd_opts;
 } MPOpts;
+
+struct dvd_opts {
+    int angle;
+    int speed;
+    char *device;
+};
 
 extern const m_option_t mp_opts[];
 extern const struct MPOpts mp_default_opts;
+extern const struct m_sub_options vo_sub_opts;
+extern const struct m_sub_options stream_cache_conf;
+extern const struct m_sub_options dvd_conf;
 
 #endif

@@ -186,8 +186,6 @@ const struct mp_cmd_def mp_cmds[] = {
   { MP_CMD_VF, "vf", { ARG_STRING, ARG_STRING } },
   { MP_CMD_VF_COMMAND, "vf-command", { ARG_STRING, ARG_STRING, ARG_STRING } },
 
-  { MP_CMD_VO_CMDLINE, "vo-cmdline", { ARG_STRING } },
-
   { MP_CMD_SCRIPT_BINDING, "script-binding", { ARG_STRING },
     .allow_auto_repeat = true, .on_updown = true},
 
@@ -226,6 +224,10 @@ const struct mp_cmd_def mp_cmds[] = {
                       {"reselect", 1})),
   }},
 
+  { MP_CMD_APPLY_PROFILE, "apply-profile", {ARG_STRING } },
+
+  { MP_CMD_LOAD_SCRIPT, "load-script", {ARG_STRING} },
+
   {0}
 };
 
@@ -257,7 +259,7 @@ static const struct legacy_cmd legacy_cmds[] = {
     {"saturation",              "add saturation"},
     {"hue",                     "add hue"},
     {"switch_vsync",            "cycle vsync"},
-    {"sub_load",                "sub_add"},
+    {"sub_load",                "sub-add"},
     {"sub_select",              "cycle sub"},
     {"sub_pos",                 "add sub-pos"},
     {"sub_delay",               "add sub-delay"},

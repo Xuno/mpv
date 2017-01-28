@@ -112,9 +112,6 @@ struct af_stream {
 enum af_control {
     AF_CONTROL_REINIT = 1,
     AF_CONTROL_RESET,
-    AF_CONTROL_SET_RESAMPLE_RATE,
-    AF_CONTROL_SET_FORMAT,
-    AF_CONTROL_SET_CHANNELS,
     AF_CONTROL_SET_VOLUME,
     AF_CONTROL_GET_VOLUME,
     AF_CONTROL_SET_PAN_LEVEL,
@@ -151,6 +148,7 @@ void af_add_output_frame(struct af_instance *af, struct mp_audio *frame);
 int af_filter_frame(struct af_stream *s, struct mp_audio *frame);
 int af_output_frame(struct af_stream *s, bool eof);
 struct mp_audio *af_read_output_frame(struct af_stream *s);
+void af_unread_output_frame(struct af_stream *s, struct mp_audio *frame);
 int af_make_writeable(struct af_instance *af, struct mp_audio *frame);
 
 double af_calc_delay(struct af_stream *s);
@@ -159,7 +157,5 @@ int af_test_output(struct af_instance *af, struct mp_audio *out);
 
 int af_from_ms(int n, float *in, int *out, int rate, float mi, float ma);
 float af_softclip(float a);
-
-bool af_lavrresample_test_conversion(int src_format, int dst_format);
 
 #endif /* MPLAYER_AF_H */

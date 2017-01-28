@@ -32,6 +32,7 @@ enum {
     VOFLAG_GL_DEBUG     = 1 << 2,       // Hint to request debug OpenGL context
     VOFLAG_ALPHA        = 1 << 3,       // Hint to request alpha framebuffer
     VOFLAG_SW           = 1 << 4,       // Hint to accept a software GL renderer
+    VOFLAG_PROBING      = 1 << 6,       // The backend is being auto-probed.
 };
 
 extern const int mpgl_preferred_gl_versions[];
@@ -63,6 +64,11 @@ struct mpgl_driver {
     // This behaves exactly like vo_driver.control().
     int (*control)(struct MPGLContext *ctx, int *events, int request, void *arg);
 
+    // These behave exactly like vo_driver.wakeup/wait_events. They are
+    // optional.
+    void (*wakeup)(struct MPGLContext *ctx);
+    void (*wait_events)(struct MPGLContext *ctx, int64_t until_time_us);
+
     // Destroy the GL context and possibly the underlying VO backend.
     void (*uninit)(struct MPGLContext *ctx);
 };
@@ -71,13 +77,11 @@ typedef struct MPGLContext {
     GL *gl;
     struct vo *vo;
     const struct mpgl_driver *driver;
+    struct mpv_global *global;
 
     // For hwdec_vaegl.c.
     const char *native_display_type;
     void *native_display;
-
-    // Windows-specific hack. See vo_opengl dwmflush suboption.
-    int dwm_flush_opt;
 
     // Flip the rendered image vertically. This is useful for dxinterop.
     bool flip_v;

@@ -42,8 +42,8 @@ function mp.input_disable_section(section)
     mp.commandv("disable-section", section)
 end
 
--- For dispatching script_binding. This is sent as:
---      script_message_to $script_name $binding_name $keystate
+-- For dispatching script-binding. This is sent as:
+--      script-message-to $script_name $binding_name $keystate
 -- The array is indexed by $binding_name, and has functions like this as value:
 --      fn($binding_name, $keystate)
 local dispatch_key_bindings = {}
@@ -412,7 +412,24 @@ mp.register_event("shutdown", function() mp.keep_running = false end)
 mp.register_event("client-message", message_dispatch)
 mp.register_event("property-change", property_change)
 
--- sent by "script_binding"
+-- called before the event loop goes back to sleep
+local idle_handlers = {}
+
+function mp.register_idle(cb)
+    idle_handlers[#idle_handlers + 1] = cb
+end
+
+function mp.unregister_idle(cb)
+    local new = {}
+    for _, handler in ipairs(idle_handlers) do
+        if handler ~= cb then
+            new[#new + 1] = handler
+        end
+    end
+    idle_handlers = new
+end
+
+-- sent by "script-binding"
 mp.register_script_message("key-binding", dispatch_key_binding)
 
 mp.msg = {
@@ -445,36 +462,38 @@ end
 
 mp.use_suspend = false
 
+local suspend_warned = false
+
 function mp.dispatch_events(allow_wait)
     local more_events = true
     if mp.use_suspend then
-        mp.suspend()
+        if not suspend_warned then
+            mp.msg.error("mp.use_suspend is now ignored.")
+            suspend_warned = true
+        end
     end
     while mp.keep_running do
-        local wait = process_timers()
-        if wait == nil then
-            wait = 1e20 -- infinity for all practical purposes
-        end
-        if more_events or wait < 0 then
-            wait = 0
-        end
-        -- Resume playloop - important especially if an error happened while
-        -- suspended, and the error was handled, but no resume was done.
-        if wait > 0 then
+        local wait = 0
+        if not more_events then
+            wait = process_timers()
+            if wait == nil then
+                for _, handler in ipairs(idle_handlers) do
+                    handler()
+                end
+                wait = 1e20 -- infinity for all practical purposes
+            end
+            -- Resume playloop - important especially if an error happened while
+            -- suspended, and the error was handled, but no resume was done.
             mp.resume_all()
             if allow_wait ~= true then
                 return
             end
         end
         local e = mp.wait_event(wait)
-        -- Empty the event queue while suspended; otherwise, each
-        -- event will keep us waiting until the core suspends again.
-        if mp.use_suspend then
-            mp.suspend()
-        end
-        more_events = (e.event ~= "none")
-        if more_events then
+        more_events = false
+        if e.event ~= "none" then
             call_event_handlers(e)
+            more_events = true
         end
     end
 end

@@ -32,7 +32,34 @@ API changes
 
 ::
 
- --- mpv 0.17.1 ---
+ --- mpv 0.23.0 ---
+ 1.24   - the deprecated mpv_suspend() and mpv_resume() APIs now do nothing.
+ --- mpv 0.22.0 ---
+ 1.23   - deprecate setting "no-" options via mpv_set_option*(). For example,
+          instead of "no-video=" you should set "video=no".
+        - do not override the SIGPIPE signal handler anymore. This was done as
+          workaround for the FFmpeg TLS code, which has been fixed long ago.
+        - deprecate mpv_suspend() and mpv_resume(). They will be stubbed out
+          in mpv 0.23.0.
+        - make mpv_set_property() work to some degree before mpv_initialize().
+          It can now be used instead of mpv_set_option().
+        - semi-deprecate mpv_set_option()/mpv_set_option_string(). You should
+          use mpv_set_property() instead. There are some deprecated properties
+          which conflict with some options (see client.h remarks on
+          mpv_set_option()), for which mpv_set_option() might still be required.
+          In future mpv releases, the conflicting deprecated options/properties
+          will be removed, and mpv_set_option() will internally translate API
+          calls to mpv_set_property().
+        - qthelper.hpp: deprecate get_property_variant, set_property_variant,
+          set_option_variant, command_variant, and replace them with
+          get_property, set_property, command.
+ --- mpv 0.19.0 ---
+ 1.22   - add stream_cb API for custom protocols
+ --- mpv 0.18.1 ---
+ ----   - remove "status" log level from mpv_request_log_messages() docs. This
+          is 100% equivalent to "v". The behavior is still the same, thus no
+          actual API change.
+ --- mpv 0.18.0 ---
  1.21   - mpv_set_property() changes behavior with MPV_FORMAT_NODE. Before this
           change it rejected mpv_nodes with format==MPV_FORMAT_STRING if the
           property was not a string or did not have special mechanisms in place
@@ -46,6 +73,11 @@ API changes
         - reading a choice property as MPV_FORMAT_NODE will now return a
           MPV_FORMAT_FLAG value if the choice is "yes" (true) or "no" (false)
           This implicitly affects Lua and JSON IPC interfaces as well.
+        - big changes to vo-cmdline on vo_opengl and vo_opengl_hq (but not
+          vo_opengl_cb): options are now normally not reset, but applied on top
+          of the current options. The special undocumented value "-" still
+          works, but now resets all options to before any vo-cmdline command
+          has been called.
  --- mpv 0.12.0 ---
  1.20   - deprecate "GL_MP_D3D_interfaces"/"glMPGetD3DInterface", and introduce
           "GL_MP_MPGetNativeDisplay"/"glMPGetNativeDisplay" (this is a

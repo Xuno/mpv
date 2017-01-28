@@ -44,7 +44,8 @@ struct sd_ass_priv {
     bool is_converted;
     struct lavc_conv *converter;
     bool on_top;
-    struct sub_bitmaps part_cache;
+    struct mp_ass_packer *packer;
+    struct sub_bitmap *bs;
     char last_text[500];
     struct mp_image_params video_params;
     struct mp_image_params last_params;
@@ -74,7 +75,7 @@ static void mp_ass_add_default_styles(ASS_Track *track, struct MPOpts *opts)
         track->default_style = sid;
         ASS_Style *style = track->styles + sid;
         style->Name = strdup("Default");
-        mp_ass_set_style(style, track->PlayResY, opts->sub_text_style);
+        mp_ass_set_style(style, track->PlayResY, opts->sub_style);
     }
 
     if (opts->ass_style_override)
@@ -137,7 +138,7 @@ static void enable_output(struct sd *sd, bool enable)
     } else {
         ctx->ass_renderer = ass_renderer_init(ctx->ass_library);
 
-        mp_ass_configure_fonts(ctx->ass_renderer, sd->opts->sub_text_style,
+        mp_ass_configure_fonts(ctx->ass_renderer, sd->opts->sub_style,
                                sd->global, sd->log);
     }
 }
@@ -211,6 +212,8 @@ static int init(struct sd *sd)
     update_subtitle_speed(sd);
 
     enable_output(sd, true);
+
+    ctx->packer = mp_ass_packer_alloc(ctx);
 
     return 0;
 }
@@ -326,14 +329,18 @@ static void configure_ass(struct sd *sd, struct mp_osd_res *dim,
         set_force_flags |= ASS_OVERRIDE_BIT_STYLE | ASS_OVERRIDE_BIT_FONT_SIZE;
     if (opts->ass_style_override == 4)
         set_force_flags |= ASS_OVERRIDE_BIT_FONT_SIZE;
+#if LIBASS_VERSION >= 0x01201001
+    if (converted)
+        set_force_flags |= ASS_OVERRIDE_BIT_ALIGNMENT;
+#endif
     ass_set_selective_style_override_enabled(priv, set_force_flags);
     ASS_Style style = {0};
-    mp_ass_set_style(&style, 288, opts->sub_text_style);
+    mp_ass_set_style(&style, 288, opts->sub_style);
     ass_set_selective_style_override(priv, &style);
     free(style.FontName);
     if (converted && track->default_style < track->n_styles) {
         mp_ass_set_style(track->styles + track->default_style,
-                         track->PlayResY, opts->sub_text_style);
+                         track->PlayResY, opts->sub_style);
     }
     ass_set_font_scale(priv, set_font_scale);
     ass_set_hinting(priv, set_hinting);
@@ -417,8 +424,8 @@ static long long find_timestamp(struct sd *sd, double pts)
 
 #undef END
 
-static void get_bitmaps(struct sd *sd, struct mp_osd_res dim, double pts,
-                        struct sub_bitmaps *res)
+static void get_bitmaps(struct sd *sd, struct mp_osd_res dim, int format,
+                        double pts, struct sub_bitmaps *res)
 {
     struct sd_ass_priv *ctx = sd->priv;
     struct MPOpts *opts = sd->opts;
@@ -459,15 +466,18 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res dim, double pts,
     if (no_ass)
         fill_plaintext(sd, pts);
 
-    ctx->part_cache.change_id = 0;
-    ctx->part_cache.num_parts = 0;
-    mp_ass_render_frame(renderer, track, ts, &ctx->part_cache);
-    talloc_steal(ctx, ctx->part_cache.parts);
+    int changed;
+    ASS_Image *imgs = ass_render_frame(renderer, track, ts, &changed);
+    mp_ass_packer_pack(ctx->packer, &imgs, 1, changed, format, res);
 
-    if (!converted)
-        mangle_colors(sd, &ctx->part_cache);
+    if (!converted && res->num_parts > 0) {
+        // mangle_colors() modifies the color field, so copy the thing.
+        MP_TARRAY_GROW(ctx, ctx->bs, res->num_parts);
+        memcpy(ctx->bs, res->parts, sizeof(ctx->bs[0]) * res->num_parts);
+        res->parts = ctx->bs;
 
-    *res = ctx->part_cache;
+        mangle_colors(sd, res);
+    }
 }
 
 struct buf {
@@ -588,6 +598,10 @@ static void fill_plaintext(struct sd *sd, double pts)
         return;
 
     bstr dst = {0};
+
+    if (ctx->on_top)
+        bstr_xappend(NULL, &dst, bstr0("{\\a6}"));
+
     while (*text) {
         if (*text == '{')
             bstr_xappend(NULL, &dst, bstr0("\\"));
@@ -607,9 +621,6 @@ static void fill_plaintext(struct sd *sd, double pts)
     event->Duration = INT_MAX;
     event->Style = track->default_style;
     event->Text = strdup(dst.start);
-
-    if (track->default_style < track->n_styles)
-        track->styles[track->default_style].Alignment = ctx->on_top ? 6 : 2;
 
     talloc_free(dst.start);
 }
@@ -659,6 +670,9 @@ static int control(struct sd *sd, enum sd_ctrl cmd, void *arg)
         return CONTROL_OK;
     case SD_CTRL_SET_VIDEO_DEF_FPS:
         ctx->video_fps = *(double *)arg;
+        update_subtitle_speed(sd);
+        return CONTROL_OK;
+    case SD_CTRL_UPDATE_SPEED:
         update_subtitle_speed(sd);
         return CONTROL_OK;
     default:
@@ -727,15 +741,17 @@ static void mangle_colors(struct sd *sd, struct sub_bitmaps *parts)
     struct mp_image_params params = ctx->video_params;
 
     if (force_601) {
-        params.colorspace = MP_CSP_BT_709;
-        params.colorlevels = MP_CSP_LEVELS_TV;
+        params.color = (struct mp_colorspace){
+            .space = MP_CSP_BT_709,
+            .levels = MP_CSP_LEVELS_TV,
+        };
     }
 
-    if (csp == params.colorspace && levels == params.colorlevels)
+    if (csp == params.color.space && levels == params.color.levels)
         return;
 
-    bool basic_conv = params.colorspace == MP_CSP_BT_709 &&
-                      params.colorlevels == MP_CSP_LEVELS_TV &&
+    bool basic_conv = params.color.space == MP_CSP_BT_709 &&
+                      params.color.levels == MP_CSP_LEVELS_TV &&
                       csp == MP_CSP_BT_601 &&
                       levels == MP_CSP_LEVELS_TV;
 
@@ -743,8 +759,8 @@ static void mangle_colors(struct sd *sd, struct sub_bitmaps *parts)
     if (opts->ass_vsfilter_color_compat == 1 && !basic_conv)
         return;
 
-    if (params.colorspace != ctx->last_params.colorspace ||
-        params.colorlevels != ctx->last_params.colorlevels)
+    if (params.color.space != ctx->last_params.color.space ||
+        params.color.levels != ctx->last_params.color.levels)
     {
         int msgl = basic_conv ? MSGL_V : MSGL_WARN;
         ctx->last_params = params;
@@ -752,22 +768,21 @@ static void mangle_colors(struct sd *sd, struct sub_bitmaps *parts)
                "RGB -> %s %s -> %s %s -> RGB\n",
                m_opt_choice_str(mp_csp_names, csp),
                m_opt_choice_str(mp_csp_levels_names, levels),
-               m_opt_choice_str(mp_csp_names, params.colorspace),
-               m_opt_choice_str(mp_csp_names, params.colorlevels));
+               m_opt_choice_str(mp_csp_names, params.color.space),
+               m_opt_choice_str(mp_csp_names, params.color.levels));
     }
 
     // Conversion that VSFilter would use
     struct mp_csp_params vs_params = MP_CSP_PARAMS_DEFAULTS;
-    vs_params.colorspace = csp;
-    vs_params.levels_in = levels;
+    vs_params.color.space = csp;
+    vs_params.color.levels = levels;
     struct mp_cmat vs_yuv2rgb, vs_rgb2yuv;
     mp_get_csp_matrix(&vs_params, &vs_yuv2rgb);
     mp_invert_cmat(&vs_rgb2yuv, &vs_yuv2rgb);
 
     // Proper conversion to RGB
     struct mp_csp_params rgb_params = MP_CSP_PARAMS_DEFAULTS;
-    rgb_params.colorspace = params.colorspace;
-    rgb_params.levels_in = params.colorlevels;
+    rgb_params.color = params.color;
     struct mp_cmat vs2rgb;
     mp_get_csp_matrix(&rgb_params, &vs2rgb);
 

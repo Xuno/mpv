@@ -15,7 +15,6 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <initguid.h>
 #include <assert.h>
 #include <windows.h>
 #include <d3d11.h>
@@ -29,7 +28,12 @@
 #include "video/mp_image_pool.h"
 
 // missing in MinGW
+#define D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BLEND 0x1
 #define D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BOB 0x2
+#define D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_ADAPTIVE 0x4
+#define D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_MOTION_COMPENSATION 0x8
+#define D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_INVERSE_TELECINE 0x10
+#define D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_FRAME_RATE_CONVERSION 0x20
 
 struct vf_priv_s {
     ID3D11Device *vo_dev;
@@ -57,6 +61,7 @@ struct vf_priv_s {
 
     int deint_enabled;
     int interlaced_only;
+    int mode;
 };
 
 static void release_tex(void *arg)
@@ -159,6 +164,9 @@ static int recreate_video_proc(struct vf_instance *vf)
     if (FAILED(hr))
         goto fail;
 
+    MP_VERBOSE(vf, "Found %d rate conversion caps. Looking for caps=0x%x.\n",
+               (int)caps.RateConversionCapsCount, p->mode);
+
     int rindex = -1;
     for (int n = 0; n < caps.RateConversionCapsCount; n++) {
         D3D11_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS rcaps;
@@ -166,19 +174,21 @@ static int recreate_video_proc(struct vf_instance *vf)
                 (p->vp_enum, n, &rcaps);
         if (FAILED(hr))
             goto fail;
-        if (rcaps.ProcessorCaps & D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BOB)
-        {
-            rindex = n;
-            break;
+        MP_VERBOSE(vf, "  - %d: 0x%08x\n", n, (unsigned)rcaps.ProcessorCaps);
+        if (rcaps.ProcessorCaps & p->mode) {
+            MP_VERBOSE(vf, "       (matching)\n");
+            if (rindex < 0)
+                rindex = n;
         }
     }
 
     if (rindex < 0) {
-        MP_ERR(vf, "No video processor found.\n");
-        goto fail;
+        MP_WARN(vf, "No fitting video processor found, picking #0.\n");
+        rindex = 0;
     }
 
-    // Assume RateConversionIndex==0 always works fine for us.
+    // TOOD: so, how do we select which rate conversion mode the processor uses?
+
     hr = ID3D11VideoDevice_CreateVideoProcessor(p->video_dev, p->vp_enum, rindex,
                                                 &p->video_proc);
     if (FAILED(hr)) {
@@ -207,21 +217,21 @@ static int recreate_video_proc(struct vf_instance *vf)
                                                          FALSE, 0);
 
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE csp = {
-        .YCbCr_Matrix = p->params.colorspace != MP_CSP_BT_601,
-        .Nominal_Range = p->params.colorlevels == MP_CSP_LEVELS_TV ? 1 : 2,
+        .YCbCr_Matrix = p->params.color.space != MP_CSP_BT_601,
+        .Nominal_Range = p->params.color.levels == MP_CSP_LEVELS_TV ? 1 : 2,
     };
     ID3D11VideoContext_VideoProcessorSetStreamColorSpace(p->video_ctx,
                                                          p->video_proc,
                                                          0, &csp);
     if (p->out_rgb) {
-        if (p->params.colorspace != MP_CSP_BT_601 &&
-            p->params.colorspace != MP_CSP_BT_709)
+        if (p->params.color.space != MP_CSP_BT_601 &&
+            p->params.color.space != MP_CSP_BT_709)
         {
             MP_WARN(vf, "Unsupported video colorspace (%s/%s). Consider "
                     "disabling hardware decoding, or using "
                     "--hwdec=d3d11va-copy to get correct output.\n",
-                    m_opt_choice_str(mp_csp_names, p->params.colorspace),
-                    m_opt_choice_str(mp_csp_levels_names, p->params.colorlevels));
+                    m_opt_choice_str(mp_csp_names, p->params.color.space),
+                    m_opt_choice_str(mp_csp_levels_names, p->params.color.levels));
         }
     } else {
         ID3D11VideoContext_VideoProcessorSetOutputColorSpace(p->video_ctx,
@@ -258,7 +268,7 @@ static int render(struct vf_instance *vf)
     mp_image_copy_attributes(out, in);
 
     D3D11_VIDEO_FRAME_FORMAT d3d_frame_format;
-    if (!mp_refqueue_is_interlaced(p->queue)) {
+    if (!mp_refqueue_should_deint(p->queue)) {
         d3d_frame_format = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
     } else if (mp_refqueue_top_field_first(p->queue)) {
         d3d_frame_format = D3D11_VIDEO_FRAME_FORMAT_INTERLACED_TOP_FIELD_FIRST;
@@ -278,7 +288,7 @@ static int render(struct vf_instance *vf)
             goto cleanup;
     }
 
-    if (!mp_refqueue_is_interlaced(p->queue)) {
+    if (!mp_refqueue_should_deint(p->queue)) {
         d3d_frame_format = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
     } else if (mp_refqueue_is_top_field(p->queue)) {
         d3d_frame_format = D3D11_VIDEO_FRAME_FORMAT_INTERLACED_TOP_FIELD_FIRST;
@@ -327,10 +337,6 @@ static int render(struct vf_instance *vf)
         goto cleanup;
     }
 
-    // Make sure the texture is updated correctly on the shared context.
-    // (I'm not sure if this is correct, though it won't harm.)
-    ID3D11DeviceContext_Flush(p->device_ctx);
-
     res = 0;
 cleanup:
     if (in_view)
@@ -355,8 +361,11 @@ static int filter_out(struct vf_instance *vf)
 
     // no filtering
     if (!mp_refqueue_should_deint(p->queue) && !p->require_filtering) {
-        struct mp_image *in = mp_refqueue_get(p->queue, 0);
-        vf_add_output_frame(vf, mp_image_new_ref(in));
+        struct mp_image *in = mp_image_new_ref(mp_refqueue_get(p->queue, 0));
+        if (!in)
+            return -1;
+        mp_image_set_params(in, &p->out_params);
+        vf_add_output_frame(vf, in);
         mp_refqueue_next(p->queue);
         return 0;
     }
@@ -515,6 +524,13 @@ fail:
 static const m_option_t vf_opts_fields[] = {
     OPT_FLAG("deint", deint_enabled, 0),
     OPT_FLAG("interlaced-only", interlaced_only, 0),
+    OPT_CHOICE("mode", mode, 0,
+        ({"blend", D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BLEND},
+         {"bob", D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BOB},
+         {"adaptive", D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_ADAPTIVE},
+         {"mocomp", D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_MOTION_COMPENSATION},
+         {"ivctc", D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_INVERSE_TELECINE},
+         {"none", 0})),
     {0}
 };
 
@@ -527,6 +543,7 @@ const vf_info_t vf_info_d3d11vpp = {
     .priv_defaults = &(const struct vf_priv_s) {
         .deint_enabled = 1,
         .interlaced_only = 1,
+        .mode = D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_DEINTERLACE_BOB,
     },
     .options = vf_opts_fields,
 };

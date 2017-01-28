@@ -37,7 +37,7 @@
 
 #include "x11_common.h"
 
-#if HAVE_SHM
+#if HAVE_SHM && HAVE_XEXT
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <X11/extensions/XShm.h>
@@ -78,7 +78,7 @@ struct priv {
 
     int current_buf;
 
-#if HAVE_SHM
+#if HAVE_SHM && HAVE_XEXT
     int Shmem_Flag;
     XShmSegmentInfo Shminfo[2];
     int Shm_Warned_Slow;
@@ -407,8 +407,8 @@ static int preinit(struct vo *vo)
         goto error;
 
     p->gc = XCreateGC(x11->display, x11->window, 0, NULL);
-    MP_WARN(vo, "Warning: this legacy VO has bad performance. Consider fixing"
-                "your graphic drivers, or not forcing the x11 VO.\n");
+    MP_WARN(vo, "Warning: this legacy VO has bad performance. Consider fixing "
+                "your graphics drivers, or not forcing the x11 VO.\n");
     return 0;
 
 error:
@@ -420,8 +420,6 @@ static int control(struct vo *vo, uint32_t request, void *data)
 {
     struct priv *p = vo->priv;
     switch (request) {
-    case VOCTRL_GET_PANSCAN:
-        return VO_TRUE;
     case VOCTRL_SET_PANSCAN:
         if (vo->config_ok)
             resize(vo);
@@ -449,5 +447,7 @@ const struct vo_driver video_out_x11 = {
     .control = control,
     .draw_image = draw_image,
     .flip_page = flip_page,
+    .wakeup = vo_x11_wakeup,
+    .wait_events = vo_x11_wait_events,
     .uninit = uninit,
 };

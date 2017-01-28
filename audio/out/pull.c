@@ -30,7 +30,7 @@
 
 #include "osdep/timer.h"
 #include "osdep/threads.h"
-#include "osdep/atomics.h"
+#include "osdep/atomic.h"
 #include "misc/ring.h"
 
 /*
@@ -101,7 +101,8 @@ static int play(struct ao *ao, void **data, int samples, int flags)
     int state = atomic_load(&p->state);
     if (!IS_PLAYING(state)) {
         set_state(ao, AO_STATE_PLAY);
-        ao->driver->resume(ao);
+        if (!ao->stream_silence)
+            ao->driver->resume(ao);
     }
 
     return write_samples;
@@ -151,7 +152,7 @@ int ao_read_data(struct ao *ao, void **data, int samples, int64_t out_time_us)
 end:
 
     if (need_wakeup)
-        mp_input_wakeup_nolock(ao->input_ctx);
+        ao->wakeup_cb(ao->wakeup_ctx);
 
     // pad with silence (underflow/paused/eof)
     for (int n = 0; n < ao->num_planes; n++)
@@ -185,7 +186,7 @@ static double get_delay(struct ao *ao)
 static void reset(struct ao *ao)
 {
     struct ao_pull_state *p = ao->api_priv;
-    if (ao->driver->reset)
+    if (!ao->stream_silence && ao->driver->reset)
         ao->driver->reset(ao); // assumes the audio callback thread is stopped
     set_state(ao, AO_STATE_NONE);
     for (int n = 0; n < ao->num_planes; n++)
@@ -195,7 +196,7 @@ static void reset(struct ao *ao)
 
 static void pause(struct ao *ao)
 {
-    if (ao->driver->reset)
+    if (!ao->stream_silence && ao->driver->reset)
         ao->driver->reset(ao);
     set_state(ao, AO_STATE_NONE);
 }
@@ -203,7 +204,8 @@ static void pause(struct ao *ao)
 static void resume(struct ao *ao)
 {
     set_state(ao, AO_STATE_PLAY);
-    ao->driver->resume(ao);
+    if (!ao->stream_silence)
+        ao->driver->resume(ao);
 }
 
 static bool get_eof(struct ao *ao)
@@ -244,6 +246,10 @@ static int init(struct ao *ao)
         p->buffers[n] = mp_ring_new(ao, ao->buffer * ao->sstride);
     atomic_store(&p->state, AO_STATE_NONE);
     assert(ao->driver->resume);
+
+    if (ao->stream_silence)
+        ao->driver->resume(ao);
+
     return 0;
 }
 

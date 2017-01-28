@@ -5,8 +5,6 @@
 
 #include "osd.h"
 
-#define OSD_CONV_CACHE_MAX 4
-
 enum mp_osdtype {
     OSDTYPE_SUB,
     OSDTYPE_SUB2, // IDs must be numerically successive
@@ -30,12 +28,9 @@ struct osd_object {
     int type; // OSDTYPE_*
     bool is_sub;
 
-    bool force_redraw;
-
     // OSDTYPE_OSD
+    bool osd_changed;
     char *text;
-
-    // OSDTYPE_OSD
     struct osd_progbar_state progbar_state;
 
     // OSDTYPE_SUB/OSDTYPE_SUB2
@@ -48,17 +43,15 @@ struct osd_object {
     // OSDTYPE_EXTERNAL2
     struct sub_bitmaps *external2;
 
-    // caches for OSD conversion (internal to render_object())
-    struct osd_conv_cache *cache[OSD_CONV_CACHE_MAX];
-    struct sub_bitmaps cached;
-
     // VO cache state
     int vo_change_id;
     struct mp_osd_res vo_res;
 
     // Internally used by osd_libass.c
-    struct sub_bitmaps parts_cache;
+    bool changed;
     struct ass_state ass;
+    struct mp_ass_packer *ass_packer;
+    struct ass_image **ass_imgs;
 };
 
 struct osd_external {
@@ -74,8 +67,10 @@ struct osd_state {
     struct osd_object *objs[MAX_OSD_PARTS];
 
     bool render_subs_in_filter;
+    double force_video_pts;
 
     bool want_redraw;
+    bool want_redraw_notification;
 
     struct MPOpts *opts;
     struct mpv_global *global;
@@ -84,6 +79,10 @@ struct osd_state {
     struct mp_draw_sub_cache *draw_cache;
 };
 
-void osd_changed_unlocked(struct osd_state *osd, int obj);
+// defined in osd_libass.c and osd_dummy.c
+void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
+                            int format, struct sub_bitmaps *out_imgs);
+void osd_init_backend(struct osd_state *osd);
+void osd_destroy_backend(struct osd_state *osd);
 
 #endif

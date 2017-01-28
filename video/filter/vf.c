@@ -20,6 +20,7 @@
 #include <string.h>
 #include <assert.h>
 #include <sys/types.h>
+#include <libavutil/buffer.h>
 #include <libavutil/common.h>
 #include <libavutil/mem.h>
 
@@ -59,7 +60,6 @@ extern const vf_info_t vf_info_vaapi;
 extern const vf_info_t vf_info_vapoursynth;
 extern const vf_info_t vf_info_vapoursynth_lazy;
 extern const vf_info_t vf_info_vdpaupp;
-extern const vf_info_t vf_info_vdpaurb;
 extern const vf_info_t vf_info_buffer;
 extern const vf_info_t vf_info_d3d11vpp;
 
@@ -98,7 +98,6 @@ static const vf_info_t *const filter_list[] = {
 #endif
 #if HAVE_VDPAU
     &vf_info_vdpaupp,
-    &vf_info_vdpaurb,
 #endif
 #if HAVE_D3D_HWACCEL
     &vf_info_d3d11vpp,
@@ -227,6 +226,8 @@ void vf_print_filter_chain(struct vf_chain *c, int msglevel,
     for (vf_instance_t *f = c->first; f; f = f->next) {
         char b[128] = {0};
         mp_snprintf_cat(b, sizeof(b), "  [%s] ", f->info->name);
+        if (f->label)
+            mp_snprintf_cat(b, sizeof(b), "\"%s\" ", f->label);
         mp_snprintf_cat(b, sizeof(b), "%s", mp_image_params_to_str(&f->fmt_out));
         if (f->autoinserted)
             mp_snprintf_cat(b, sizeof(b), " [a]");
@@ -253,10 +254,10 @@ static struct vf_instance *vf_open(struct vf_chain *c, const char *name,
         .out_pool = talloc_steal(vf, mp_image_pool_new(16)),
         .chain = c,
     };
-    struct m_config *config = m_config_from_obj_desc(vf, vf->log, &desc);
-    if (m_config_apply_defaults(config, name, c->opts->vf_defs) < 0)
-        goto error;
-    if (m_config_set_obj_params(config, args) < 0)
+    struct m_config *config =
+        m_config_from_obj_desc_and_args(vf, vf->log, c->global, &desc,
+                                        name, c->opts->vf_defs, args);
+    if (!config)
         goto error;
     vf->priv = config->optstruct;
     int retcode = vf->info->open(vf);
@@ -298,6 +299,7 @@ void vf_remove_filter(struct vf_chain *c, struct vf_instance *vf)
     assert(prev); // not inserted
     prev->next = vf->next;
     vf_uninit_filter(vf);
+    c->initialized = 0;
 }
 
 struct vf_instance *vf_append_filter(struct vf_chain *c, const char *name,
@@ -312,6 +314,7 @@ struct vf_instance *vf_append_filter(struct vf_chain *c, const char *name,
             pprev = &(*pprev)->next;
         vf->next = *pprev ? *pprev : NULL;
         *pprev = vf;
+        c->initialized = 0;
     }
     return vf;
 }
@@ -452,6 +455,13 @@ struct mp_image *vf_read_output_frame(struct vf_chain *c)
     if (!c->last->num_out_queued)
         vf_output_frame(c, false);
     return vf_dequeue_output_frame(c->last);
+}
+
+// Undo the previous vf_read_output_frame().
+void vf_unread_output_frame(struct vf_chain *c, struct mp_image *img)
+{
+    struct vf_instance *vf = c->last;
+    MP_TARRAY_INSERT_AT(vf, vf->out_queued, vf->num_out_queued, 0, img);
 }
 
 // Some filters (vf_vapoursynth) filter on separate threads, and may need new
@@ -635,14 +645,20 @@ int vf_reconfig(struct vf_chain *c, const struct mp_image_params *params)
 
     uint8_t unused[IMGFMT_END - IMGFMT_START];
     update_formats(c, c->first, unused);
+    AVBufferRef *hwfctx = c->in_hwframes_ref;
     struct vf_instance *failing = NULL;
     for (struct vf_instance *vf = c->first; vf; vf = vf->next) {
+        av_buffer_unref(&vf->in_hwframes_ref);
+        av_buffer_unref(&vf->out_hwframes_ref);
+        vf->in_hwframes_ref = hwfctx ? av_buffer_ref(hwfctx) : NULL;
+        vf->out_hwframes_ref = hwfctx ? av_buffer_ref(hwfctx) : NULL;
         r = vf_reconfig_wrapper(vf, &cur);
         if (r < 0) {
             failing = vf;
             break;
         }
         cur = vf->fmt_out;
+        hwfctx = vf->out_hwframes_ref;
     }
     c->output_params = cur;
     c->initialized = r < 0 ? -1 : 1;
@@ -652,8 +668,15 @@ int vf_reconfig(struct vf_chain *c, const struct mp_image_params *params)
     mp_msg(c->log, loglevel, "Video filter chain:\n");
     vf_print_filter_chain(c, loglevel, failing);
     if (r < 0)
-        c->input_params = c->output_params = (struct mp_image_params){0};
+        c->output_params = (struct mp_image_params){0};
     return r;
+}
+
+// Hack to get mp_image.hwctx before vf_reconfig()
+void vf_set_proto_frame(struct vf_chain *c, struct mp_image *img)
+{
+    av_buffer_unref(&c->in_hwframes_ref);
+    c->in_hwframes_ref = img && img->hwctx ? av_buffer_ref(img->hwctx) : NULL;
 }
 
 struct vf_instance *vf_find_by_label(struct vf_chain *c, const char *label)
@@ -669,6 +692,8 @@ struct vf_instance *vf_find_by_label(struct vf_chain *c, const char *label)
 
 static void vf_uninit_filter(vf_instance_t *vf)
 {
+    av_buffer_unref(&vf->in_hwframes_ref);
+    av_buffer_unref(&vf->out_hwframes_ref);
     if (vf->uninit)
         vf->uninit(vf);
     vf_forget_frames(vf);
@@ -720,6 +745,7 @@ void vf_destroy(struct vf_chain *c)
 {
     if (!c)
         return;
+    av_buffer_unref(&c->in_hwframes_ref);
     while (c->first) {
         vf_instance_t *vf = c->first;
         c->first = vf->next;

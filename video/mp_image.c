@@ -27,6 +27,7 @@
 #include <libavutil/mem.h>
 #include <libavutil/common.h>
 #include <libavutil/bswap.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/rational.h>
 #include <libavcodec/avcodec.h>
 
@@ -386,6 +387,7 @@ void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
     dst->fields = src->fields;
     dst->pts = src->pts;
     dst->dts = src->dts;
+    dst->pkt_duration = src->pkt_duration;
     dst->params.rotate = src->params.rotate;
     dst->params.stereo_in = src->params.stereo_in;
     dst->params.stereo_out = src->params.stereo_out;
@@ -393,11 +395,13 @@ void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
         dst->params.p_w = src->params.p_w;
         dst->params.p_h = src->params.p_h;
     }
-    dst->params.primaries = src->params.primaries;
-    dst->params.gamma = src->params.gamma;
+    dst->params.color.primaries = src->params.color.primaries;
+    dst->params.color.gamma = src->params.color.gamma;
+    dst->params.color.nom_peak = src->params.color.nom_peak;
+    dst->params.color.sig_peak = src->params.color.sig_peak;
     if ((dst->fmt.flags & MP_IMGFLAG_YUV) == (src->fmt.flags & MP_IMGFLAG_YUV)) {
-        dst->params.colorspace = src->params.colorspace;
-        dst->params.colorlevels = src->params.colorlevels;
+        dst->params.color.space = src->params.color.space;
+        dst->params.color.levels = src->params.color.levels;
         dst->params.chroma_location = src->params.chroma_location;
     }
     mp_image_params_guess_csp(&dst->params); // ensure colorspace consistency
@@ -450,7 +454,7 @@ void mp_image_clear(struct mp_image *img, int x0, int y0, int x1, int y1)
         plane_clear[0] = av_le2ne16(0x8000);
     } else if (area.imgfmt == IMGFMT_UYVY) {
         plane_clear[0] = av_le2ne16(0x0080);
-    } else if (area.imgfmt == IMGFMT_NV12 || area.imgfmt == IMGFMT_NV21) {
+    } else if (area.fmt.flags & MP_IMGFLAG_YUV_NV) {
         plane_clear[1] = 0x8080;
     } else if (area.fmt.flags & MP_IMGFLAG_YUV_P) {
         uint16_t chroma_clear = (1 << area.fmt.plane_bits) / 2;
@@ -510,10 +514,16 @@ char *mp_image_params_to_str_buf(char *b, size_t bs,
             mp_snprintf_cat(b, bs, " [%d:%d]", p->p_w, p->p_h);
         mp_snprintf_cat(b, bs, " %s", mp_imgfmt_to_name(p->imgfmt));
         if (p->hw_subfmt)
-            mp_snprintf_cat(b, bs, "[%llu]", (unsigned long long)(p->hw_subfmt));
-        mp_snprintf_cat(b, bs, " %s/%s",
-                        m_opt_choice_str(mp_csp_names, p->colorspace),
-                        m_opt_choice_str(mp_csp_levels_names, p->colorlevels));
+            mp_snprintf_cat(b, bs, "[%s]", mp_imgfmt_to_name(p->hw_subfmt));
+        mp_snprintf_cat(b, bs, " %s/%s/%s/%s",
+                        m_opt_choice_str(mp_csp_names, p->color.space),
+                        m_opt_choice_str(mp_csp_prim_names, p->color.primaries),
+                        m_opt_choice_str(mp_csp_trc_names, p->color.gamma),
+                        m_opt_choice_str(mp_csp_levels_names, p->color.levels));
+        if (p->color.nom_peak)
+            mp_snprintf_cat(b, bs, " NP=%f", p->color.nom_peak);
+        if (p->color.sig_peak)
+            mp_snprintf_cat(b, bs, " SP=%f", p->color.sig_peak);
         mp_snprintf_cat(b, bs, " CL=%s",
                         m_opt_choice_str(mp_chroma_names, p->chroma_location));
         if (p->rotate)
@@ -564,11 +574,7 @@ bool mp_image_params_equal(const struct mp_image_params *p1,
            p1->hw_subfmt == p2->hw_subfmt &&
            p1->w == p2->w && p1->h == p2->h &&
            p1->p_w == p2->p_w && p1->p_h == p2->p_h &&
-           p1->colorspace == p2->colorspace &&
-           p1->colorlevels == p2->colorlevels &&
-           p1->primaries == p2->primaries &&
-           p1->gamma == p2->gamma &&
-           p1->peak == p2->peak &&
+           mp_colorspace_equal(p1->color, p2->color) &&
            p1->chroma_location == p2->chroma_location &&
            p1->rotate == p2->rotate &&
            p1->stereo_in == p2->stereo_in &&
@@ -598,51 +604,56 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
     if (!fmt.id)
         return;
     if (fmt.flags & MP_IMGFLAG_YUV) {
-        if (params->colorspace != MP_CSP_BT_601 &&
-            params->colorspace != MP_CSP_BT_709 &&
-            params->colorspace != MP_CSP_BT_2020_NC &&
-            params->colorspace != MP_CSP_BT_2020_C &&
-            params->colorspace != MP_CSP_SMPTE_240M &&
-            params->colorspace != MP_CSP_YCGCO)
+        if (params->color.space != MP_CSP_BT_601 &&
+            params->color.space != MP_CSP_BT_709 &&
+            params->color.space != MP_CSP_BT_2020_NC &&
+            params->color.space != MP_CSP_BT_2020_C &&
+            params->color.space != MP_CSP_SMPTE_240M &&
+            params->color.space != MP_CSP_YCGCO)
         {
             // Makes no sense, so guess instead
             // YCGCO should be separate, but libavcodec disagrees
-            params->colorspace = MP_CSP_AUTO;
+            params->color.space = MP_CSP_AUTO;
         }
-        if (params->colorspace == MP_CSP_AUTO)
-            params->colorspace = mp_csp_guess_colorspace(params->w, params->h);
-        if (params->colorlevels == MP_CSP_LEVELS_AUTO)
-            params->colorlevels = MP_CSP_LEVELS_TV;
-        if (params->primaries == MP_CSP_PRIM_AUTO) {
-            // Guess based on the colormatrix as a first priority
-            if (params->colorspace == MP_CSP_BT_2020_NC ||
-                params->colorspace == MP_CSP_BT_2020_C) {
-                params->primaries = MP_CSP_PRIM_BT_2020;
-            } else if (params->colorspace == MP_CSP_BT_709) {
-                params->primaries = MP_CSP_PRIM_BT_709;
+        if (params->color.space == MP_CSP_AUTO)
+            params->color.space = mp_csp_guess_colorspace(params->w, params->h);
+        if (params->color.levels == MP_CSP_LEVELS_AUTO) {
+            if (params->color.gamma == MP_CSP_TRC_V_LOG) {
+                params->color.levels = MP_CSP_LEVELS_PC;
             } else {
-                // Ambiguous colormatrix for BT.601, guess based on res
-                params->primaries = mp_csp_guess_primaries(params->w, params->h);
+                params->color.levels = MP_CSP_LEVELS_TV;
             }
         }
-        if (params->gamma == MP_CSP_TRC_AUTO)
-            params->gamma = MP_CSP_TRC_BT_1886;
+        if (params->color.primaries == MP_CSP_PRIM_AUTO) {
+            // Guess based on the colormatrix as a first priority
+            if (params->color.space == MP_CSP_BT_2020_NC ||
+                params->color.space == MP_CSP_BT_2020_C) {
+                params->color.primaries = MP_CSP_PRIM_BT_2020;
+            } else if (params->color.space == MP_CSP_BT_709) {
+                params->color.primaries = MP_CSP_PRIM_BT_709;
+            } else {
+                // Ambiguous colormatrix for BT.601, guess based on res
+                params->color.primaries = mp_csp_guess_primaries(params->w, params->h);
+            }
+        }
+        if (params->color.gamma == MP_CSP_TRC_AUTO)
+            params->color.gamma = MP_CSP_TRC_BT_1886;
     } else if (fmt.flags & MP_IMGFLAG_RGB) {
-        params->colorspace = MP_CSP_RGB;
-        params->colorlevels = MP_CSP_LEVELS_PC;
+        params->color.space = MP_CSP_RGB;
+        params->color.levels = MP_CSP_LEVELS_PC;
 
         // The majority of RGB content is either sRGB or (rarely) some other
         // color space which we don't even handle, like AdobeRGB or
         // ProPhotoRGB. The only reasonable thing we can do is assume it's
         // sRGB and hope for the best, which should usually just work out fine.
         // Note: sRGB primaries = BT.709 primaries
-        if (params->primaries == MP_CSP_PRIM_AUTO)
-            params->primaries = MP_CSP_PRIM_BT_709;
-        if (params->gamma == MP_CSP_TRC_AUTO)
-            params->gamma = MP_CSP_TRC_SRGB;
+        if (params->color.primaries == MP_CSP_PRIM_AUTO)
+            params->color.primaries = MP_CSP_PRIM_BT_709;
+        if (params->color.gamma == MP_CSP_TRC_AUTO)
+            params->color.gamma = MP_CSP_TRC_SRGB;
     } else if (fmt.flags & MP_IMGFLAG_XYZ) {
-        params->colorspace = MP_CSP_XYZ;
-        params->colorlevels = MP_CSP_LEVELS_PC;
+        params->color.space = MP_CSP_XYZ;
+        params->color.levels = MP_CSP_LEVELS_PC;
 
         // The default XYZ matrix converts it to BT.709 color space
         // since that's the most likely scenario. Proper VOs should ignore
@@ -652,22 +663,22 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
         // gamut for VOs which *do* use the specialized XYZ matrix but don't
         // know any better output gamut other than whatever the source is
         // tagged with.
-        if (params->primaries == MP_CSP_PRIM_AUTO)
-            params->primaries = MP_CSP_PRIM_BT_709;
-        if (params->gamma == MP_CSP_TRC_AUTO)
-            params->gamma = MP_CSP_TRC_LINEAR;
+        if (params->color.primaries == MP_CSP_PRIM_AUTO)
+            params->color.primaries = MP_CSP_PRIM_BT_709;
+        if (params->color.gamma == MP_CSP_TRC_AUTO)
+            params->color.gamma = MP_CSP_TRC_LINEAR;
     } else {
         // We have no clue.
-        params->colorspace = MP_CSP_AUTO;
-        params->colorlevels = MP_CSP_LEVELS_AUTO;
-        params->primaries = MP_CSP_PRIM_AUTO;
-        params->gamma = MP_CSP_TRC_AUTO;
+        params->color.space = MP_CSP_AUTO;
+        params->color.levels = MP_CSP_LEVELS_AUTO;
+        params->color.primaries = MP_CSP_PRIM_AUTO;
+        params->color.gamma = MP_CSP_TRC_AUTO;
     }
 
-    // Guess the reference peak (independent of the colorspace)
-    if (params->gamma == MP_CSP_TRC_SMPTE_ST2084) {
-        if (!params->peak)
-            params->peak = 10000; // As per the spec
+    // Guess the nominal peak (independent of the colorspace)
+    if (params->color.gamma == MP_CSP_TRC_SMPTE_ST2084) {
+        if (!params->color.nom_peak)
+            params->color.nom_peak = 10000; // As per the spec
     }
 }
 
@@ -696,6 +707,20 @@ static void mp_image_copy_fields_from_av_frame(struct mp_image *dst,
         dst->fields |= MP_IMGFIELD_TOP_FIRST;
     if (src->repeat_pict == 1)
         dst->fields |= MP_IMGFIELD_REPEAT_FIRST;
+
+    if (src->hw_frames_ctx) {
+        AVHWFramesContext *fctx = (void *)src->hw_frames_ctx->data;
+        dst->params.hw_subfmt = pixfmt2imgfmt(fctx->sw_format);
+    }
+
+    dst->params.color = (struct mp_colorspace){
+        .space = avcol_spc_to_mp_csp(src->colorspace),
+        .levels = avcol_range_to_mp_csp_levels(src->color_range),
+        .primaries = avcol_pri_to_mp_csp_prim(src->color_primaries),
+        .gamma = avcol_trc_to_mp_csp_trc(src->color_trc),
+    };
+
+    dst->params.chroma_location = avchroma_location_to_mp(src->chroma_location);
 }
 
 // Copy properties and data of the mp_image into the AVFrame, without taking
@@ -724,8 +749,13 @@ static void mp_image_copy_fields_to_av_frame(struct AVFrame *dst,
     if (src->fields & MP_IMGFIELD_REPEAT_FIRST)
         dst->repeat_pict = 1;
 
-    dst->colorspace = mp_csp_to_avcol_spc(src->params.colorspace);
-    dst->color_range = mp_csp_levels_to_avcol_range(src->params.colorlevels);
+    dst->colorspace = mp_csp_to_avcol_spc(src->params.color.space);
+    dst->color_range = mp_csp_levels_to_avcol_range(src->params.color.levels);
+    dst->color_primaries =
+        mp_csp_prim_to_avcol_pri(src->params.color.primaries);
+    dst->color_trc = mp_csp_trc_to_avcol_trc(src->params.color.gamma);
+
+    dst->chroma_location = mp_chroma_location_to_av(src->params.chroma_location);
 }
 
 // Create a new mp_image reference to av_frame.
@@ -735,9 +765,7 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *av_frame)
     mp_image_copy_fields_from_av_frame(&t, av_frame);
     for (int p = 0; p < MP_MAX_PLANES; p++)
         t.bufs[p] = av_frame->buf[p];
-#if HAVE_AVUTIL_HAS_HWCONTEXT
     t.hwctx = av_frame->hw_frames_ctx;
-#endif
     return mp_image_new_ref(&t);
 }
 
@@ -754,9 +782,7 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *img)
     mp_image_copy_fields_to_av_frame(frame, new_ref);
     for (int p = 0; p < MP_MAX_PLANES; p++)
         frame->buf[p] = new_ref->bufs[p];
-#if HAVE_AVUTIL_HAS_HWCONTEXT
     frame->hw_frames_ctx = new_ref->hwctx;
-#endif
     *new_ref = (struct mp_image){0};
     talloc_free(new_ref);
     return frame;
