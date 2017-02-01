@@ -174,7 +174,7 @@ enum mp_imgfmt {
     IMGFMT_BGR32f,     // 12 bytes per pixel, float32_t channels
     IMGFMT_RGB96f,     // 12 bytes per pixel, float32_t channels
     IMGFMT_RGBA32f,    // 16 bytes per pixel, float32_t channels
-    IMGFMT_RGBA128f ,  // 16 bytes per pixel, float32_t channels
+    IMGFMT_RGBA128f,  // 16 bytes per pixel, float32_t channels
 
     // Like e.g. IMGFMT_ARGB, but has a padding byte instead of alpha
     IMGFMT_0RGB,
