@@ -297,6 +297,10 @@ static const struct packed_fmt_entry mp_packed_formats[] = {
     {IMGFMT_RGB48,      2, {1, 2, 3, 0}},
     {IMGFMT_RGBA64,     2, {1, 2, 3, 4}},
     {IMGFMT_BGRA64,     2, {3, 2, 1, 4}},
+    {IMGFMT_RGB32f,     4, {1, 2, 3, 0}},
+    {IMGFMT_RGBA32f,    4, {1, 2, 3, 4}},
+    {IMGFMT_RGB96f,     4, {1, 2, 3, 0}},
+    {IMGFMT_RGBA128f,   4, {1, 2, 3, 4}},
     {0},
 };
 

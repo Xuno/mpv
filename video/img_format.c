@@ -38,6 +38,11 @@ static const struct mp_imgfmt_entry mp_imgfmt_list[] = {
     {"vdpau_output",    IMGFMT_VDPAU_OUTPUT},
     {"d3d11_nv12",      IMGFMT_D3D11NV12},
     {"d3d11_rgb",       IMGFMT_D3D11RGB},
+    {"rgb32f",          IMGFMT_RGB32f},
+    {"bgr32f",          IMGFMT_BGR32f},
+    {"rgba32f",         IMGFMT_RGBA32f},
+    {"rgb96f",          IMGFMT_RGB96f},
+    {"rgba128f",        IMGFMT_RGBA128f},
     // FFmpeg names have an annoying "_vld" suffix
     {"videotoolbox",    IMGFMT_VIDEOTOOLBOX},
     {"vaapi",           IMGFMT_VAAPI},
