@@ -17,8 +17,8 @@
 #define MP_FOURCC_RGB16 MP_FOURCC_E(16,  'B', 'G', 'R')
 #define MP_FOURCC_RGB24 MP_FOURCC_E(24,  'B', 'G', 'R')
 #define MP_FOURCC_RGB32 MP_FOURCC_E('A', 'B', 'G', 'R')
-#define MP_FOURCC_RGB96 MP_FOURCC_E(96,  'B', 'G', 'R')
-#define MP_FOURCC_RGB128 MP_FOURCC_E(128,  'B', 'G', 'R')
+#define MP_FOURCC_RGB96f MP_FOURCC_E(96,  'B', 'G', 'R')
+#define MP_FOURCC_RGB128f MP_FOURCC_E(128,  'B', 'G', 'R')
 
 #define MP_FOURCC_BGR8  MP_FOURCC_E(8,   'R', 'G', 'B')
 #define MP_FOURCC_BGR12 MP_FOURCC_E(12,  'R', 'G', 'B')
@@ -26,8 +26,8 @@
 #define MP_FOURCC_BGR16 MP_FOURCC_E(16,  'R', 'G', 'B')
 #define MP_FOURCC_BGR24 MP_FOURCC_E(24,  'R', 'G', 'B')
 #define MP_FOURCC_BGR32 MP_FOURCC_E('A', 'R', 'G', 'B')
-#define MP_FOURCC_BGR96 MP_FOURCC_E(96,  'R', 'G', 'B')
-#define MP_FOURCC_BGR128 MP_FOURCC_E(128,  'R', 'G', 'B')
+#define MP_FOURCC_BGR96f MP_FOURCC_E(96,  'R', 'G', 'B')
+#define MP_FOURCC_BGR128f MP_FOURCC_E(128,  'R', 'G', 'B')
 
 #define MP_FOURCC_YVU9  MP_FOURCC('Y', 'U', 'V', '9')
 #define MP_FOURCC_YUV9  MP_FOURCC('Y', 'V', 'U', '9')

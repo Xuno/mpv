@@ -169,6 +169,13 @@ enum mp_imgfmt {
     IMGFMT_RGBA64,              // 8 bytes per pixel, uint16_t channels
     IMGFMT_BGRA64,
 
+    //  float32_t channels (sizeof(float) 4 bytes per channel)
+    IMGFMT_RGB32f,     // 12 bytes per pixel, float32_t channels
+    IMGFMT_BGR32f,     // 12 bytes per pixel, float32_t channels
+    IMGFMT_RGB96f,     // 12 bytes per pixel, float32_t channels
+    IMGFMT_RGBA32f,    // 16 bytes per pixel, float32_t channels
+    IMGFMT_RGBA128f ,  // 16 bytes per pixel, float32_t channels
+
     // Like e.g. IMGFMT_ARGB, but has a padding byte instead of alpha
     IMGFMT_0RGB,
     IMGFMT_BGR0,
@@ -225,12 +232,6 @@ enum mp_imgfmt {
     // IMGFMT_BGR32 = b | (g << 8) | (r << 16) | (a << 24)
     IMGFMT_RGB32   = MP_SELECT_LE_BE(IMGFMT_RGBA, IMGFMT_ABGR),
     IMGFMT_BGR32   = MP_SELECT_LE_BE(IMGFMT_BGRA, IMGFMT_ARGB),
-    //  float32_t channels (sizeof(float) 4 bytes per channel)
-    IMGFMT_RGB32f,     // 12 bytes per pixel, float32_t channels
-    IMGFMT_BGR32f,     // 12 bytes per pixel, float32_t channels
-    IMGFMT_RGB96f,     // 12 bytes per pixel, float32_t channels
-    IMGFMT_RGBA32f,    // 16 bytes per pixel, float32_t channels
-    IMGFMT_RGBA128f ,  // 16 bytes per pixel, float32_t channels
 };
 
 static inline bool IMGFMT_IS_RGB(int fmt)

@@ -225,6 +225,9 @@ static int demux_rawvideo_open(demuxer_t *demuxer, enum demux_check check)
         case MP_FOURCC_RGB32: case MP_FOURCC_BGR32:
             bpp = 32;
             break;
+        case MP_FOURCC_RGB96f: case MP_FOURCC_BGR96f:
+            bpp = 96;
+            break;
         }
         if (!bpp) {
             MP_ERR(demuxer, "rawvideo: img size not specified and unknown format!\n");
@@ -232,6 +235,8 @@ static int demux_rawvideo_open(demuxer_t *demuxer, enum demux_check check)
         }
         imgsize = width * height * bpp / 8;
     }
+
+    MP_INFO(demuxer, "rawvideo: img size: %d bytes,wxh: %d x %d px\n",imgsize,width,height);
 
     struct sh_stream *sh = demux_alloc_sh_stream(STREAM_VIDEO);
     struct mp_codec_params *c = sh->codec;

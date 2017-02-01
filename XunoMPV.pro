@@ -618,3 +618,27 @@ HEADERS += \
     video/vdpau_mixer.h \
     waftools/fragments/cocoa.m \
     mpv_talloc.h
+
+
+     devtools=/home/lex/develop-tools
+     CONFIG += link_pkgconfig
+     PKGCONFIG += $${devtools}/opencv/opencv-3.1.0/build-0/lib/pkgconfig/opencv.pc
+
+     FFMPEG_PATH = $${devtools}/ffmpeg/ffmpeg_sources/ffmpeg-build
+
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/fdk-aac.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libavdevice.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libavformat.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libpostproc.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libswscale.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/x264.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libavcodec.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libavfilter.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libavutil.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/libswresample.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/vpx.pc
+     PKGCONFIG += $${FFMPEG_PATH}/lib/pkgconfig/x265.pc
+
+    INCLUDEPATH += /home/lex/project-C/github/XunoMPV/build
+
+

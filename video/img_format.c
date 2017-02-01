@@ -141,6 +141,22 @@ static struct mp_imgfmt_desc mp_only_imgfmt_desc(int mpfmt)
             .flags = MP_IMGFLAG_BE | MP_IMGFLAG_LE | MP_IMGFLAG_YUV |
                      MP_IMGFLAG_HWACCEL,
         };
+    case IMGFMT_RGB96f:
+        return (struct mp_imgfmt_desc) {
+            .id = mpfmt,
+            .avformat = AV_PIX_FMT_NONE,
+            .flags = MP_IMGFLAG_BE | MP_IMGFLAG_LE | MP_IMGFLAG_RGB,
+            .num_planes = 3,
+            .bytes[0] = sizeof(float_t),
+            .bytes[1] = sizeof(float_t),
+            .bytes[2] = sizeof(float_t),
+            .bpp[0] = sizeof(float_t)*8,
+            .bpp[1] = sizeof(float_t)*8,
+            .bpp[2] = sizeof(float_t)*8,
+            .plane_bits = sizeof(float_t)*8,
+            .component_bits = sizeof(float_t)*8,
+            .component_full_bits = sizeof(float_t)*8*3
+        };
     }
     return (struct mp_imgfmt_desc) {0};
 }
