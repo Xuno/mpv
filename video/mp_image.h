@@ -158,6 +158,7 @@ void memcpy_pic(void *dst, const void *src, int bytesPerLine, int height,
                 int dstStride, int srcStride);
 void memset_pic(void *dst, int fill, int bytesPerLine, int height, int stride);
 void memset16_pic(void *dst, int fill, int unitsPerLine, int height, int stride);
+void memset32_pic(void *dst, int fill, int unitsPerLine, int height, int stride);
 
 void mp_check_gpu_memcpy(struct mp_log *log, bool *once);
 

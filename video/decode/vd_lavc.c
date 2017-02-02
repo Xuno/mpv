@@ -543,13 +543,14 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     }
 
     /* open it */
+    MP_ERR(vd, "111Could not open codec.\n");
     if (avcodec_open2(avctx, lavc_codec, NULL) < 0)
         goto error;
 
     return;
 
 error:
-    MP_ERR(vd, "Could not open codec.\n");
+    MP_ERR(vd, "22Could not open codec.\n");
     uninit_avctx(vd);
 }
 
@@ -1039,6 +1040,8 @@ static void add_decoders(struct mp_decoder_list *list)
     mp_add_lavc_decoders(list, AVMEDIA_TYPE_VIDEO);
     mp_add_decoder(list, "lavc", "mp-rawvideo", "mp-rawvideo",
                    "raw video");
+    mp_add_decoder(list, "xuno", "mp-rawvideo32", "mp-rawvideo32",
+                   "raw video 32");
 }
 
 const struct vd_functions mpcodecs_vd_ffmpeg = {

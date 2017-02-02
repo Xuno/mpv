@@ -470,8 +470,11 @@ void mp_image_clear(struct mp_image *img, int x0, int y0, int x1, int y1)
         if (bpp <= 8) {
             memset_pic(area.planes[p], plane_clear[p], bytes,
                        mp_image_plane_h(&area, p), area.stride[p]);
-        } else {
+        } else if (bpp <= 16) {
             memset16_pic(area.planes[p], plane_clear[p], (bytes + 1) / 2,
+                         mp_image_plane_h(&area, p), area.stride[p]);
+        } else {
+            memset32_pic(area.planes[p], plane_clear[p], (bytes + 2) / 4,   //TODO ?? (bytes + 2) / 4
                          mp_image_plane_h(&area, p), area.stride[p]);
         }
     }
@@ -825,6 +828,24 @@ void memset16_pic(void *dst, int fill, int unitsPerLine, int height, int stride)
             while (line < end)
                 *line++ = fill;
             dst = (uint8_t *)dst + stride;
+        }
+    }
+}
+
+void memset32_pic(void *dst, int fill, int unitsPerLine, int height, int stride)
+{
+    const int bpc=sizeof(float_t);
+    if (fill == 0) {
+        memset_pic(dst, 0, unitsPerLine * bpc, height, stride);
+    } else {
+        for (int i = 0; i < height; i++) {
+            float_t *line = dst;
+            float_t *end = line + unitsPerLine;
+            while (line < end){
+                line+=bpc;
+                *line = fill;
+            }
+            dst = (float_t *)dst + stride;
         }
     }
 }

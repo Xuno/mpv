@@ -263,6 +263,104 @@ static int demux_rawvideo_open(demuxer_t *demuxer, enum demux_check check)
     return 0;
 }
 
+
+static int demux_rawvideo_open32(demuxer_t *demuxer, enum demux_check check)
+{
+    MP_INFO(demuxer, "demux_rawvideo_open32\n");
+    struct demux_rawvideo_opts *opts =
+        mp_get_config_group(demuxer, demuxer->global, &demux_rawvideo_conf);
+
+    if (check != DEMUX_CHECK_REQUEST && check != DEMUX_CHECK_FORCE)
+        return -1;
+
+    int width = opts->width;
+    int height = opts->height;
+
+    if (!width || !height) {
+        MP_ERR(demuxer, "rawvideo32: width or height not specified!\n");
+        return -1;
+    }
+
+    const char *decoder = "rawvideo32";
+    int imgfmt = opts->vformat;
+    int imgsize = opts->imgsize;
+    if (opts->mp_format && !IMGFMT_IS_HWACCEL(opts->mp_format)) {
+        decoder = "mp-rawvideo32";
+        imgfmt = opts->mp_format;
+        if (!imgsize) {
+            struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(opts->mp_format);
+            for (int p = 0; p < desc.num_planes; p++) {
+                imgsize += ((width >> desc.xs[p]) * (height >> desc.ys[p]) *
+                            desc.bpp[p] + 7) / 8;
+            }
+        }
+    } else if (opts->codec && opts->codec[0])
+        decoder = talloc_strdup(demuxer, opts->codec);
+
+    if (!imgsize) {
+        int bpp = 0;
+        switch (imgfmt) {
+        case MP_FOURCC_I420: case MP_FOURCC_IYUV:
+        case MP_FOURCC_NV12: case MP_FOURCC_NV21:
+        case MP_FOURCC_HM12:
+        case MP_FOURCC_YV12:
+            bpp = 12;
+            break;
+        case MP_FOURCC_RGB12: case MP_FOURCC_BGR12:
+        case MP_FOURCC_RGB15: case MP_FOURCC_BGR15:
+        case MP_FOURCC_RGB16: case MP_FOURCC_BGR16:
+        case MP_FOURCC_YUY2:  case MP_FOURCC_UYVY:
+            bpp = 16;
+            break;
+        case MP_FOURCC_RGB8: case MP_FOURCC_BGR8:
+        case MP_FOURCC_Y800: case MP_FOURCC_Y8:
+            bpp = 8;
+            break;
+        case MP_FOURCC_RGB24: case MP_FOURCC_BGR24:
+            bpp = 24;
+            break;
+        case MP_FOURCC_RGB32: case MP_FOURCC_BGR32:
+            bpp = 32;
+            break;
+        case MP_FOURCC_RGB96f: case MP_FOURCC_BGR96f:
+            bpp = 96;
+            break;
+        case MP_FOURCC_RGB128f: case MP_FOURCC_BGR128f:
+            bpp = 128;
+            break;
+        }
+        if (!bpp) {
+            MP_ERR(demuxer, "rawvideo32: img size not specified and unknown format!\n");
+            return -1;
+        }
+        imgsize = width * height * bpp / 8;
+    }
+
+    MP_INFO(demuxer, "rawvideo32: img size: %d bytes,wxh: %d x %d px\n",imgsize,width,height);
+
+    struct sh_stream *sh = demux_alloc_sh_stream(STREAM_VIDEO);
+    struct mp_codec_params *c = sh->codec;
+    c->codec = decoder;
+    c->codec_tag = imgfmt;
+    c->fps = opts->fps;
+    c->reliable_fps = true;
+    c->disp_w = width;
+    c->disp_h = height;
+    demux_add_sh_stream(demuxer, sh);
+
+    struct priv *p = talloc_ptrtype(demuxer, p);
+    demuxer->priv = p;
+    *p = (struct priv) {
+        .sh = sh,
+        .frame_size = imgsize,
+        .frame_rate = c->fps,
+        .read_frames = 1,
+    };
+
+    return 0;
+}
+
+
 static int raw_fill_buffer(demuxer_t *demuxer)
 {
     struct priv *p = demuxer->priv;
@@ -280,6 +378,36 @@ static int raw_fill_buffer(demuxer_t *demuxer)
     dp->pts = (dp->pos  / p->frame_size) / p->frame_rate;
 
     int len = stream_read(demuxer->stream, dp->buffer, dp->len);
+
+    MP_INFO(demuxer, "Readed stream raw_fill_buffer - %d.\n", len);
+
+    demux_packet_shorten(dp, len);
+    demux_add_packet(p->sh, dp);
+
+    return 1;
+}
+
+static int raw_fill_buffer32(demuxer_t *demuxer)
+{
+   MP_INFO(demuxer, "raw_fill_buffer32\n");
+    struct priv *p = demuxer->priv;
+
+    if (demuxer->stream->eof)
+        return 0;
+
+    struct demux_packet *dp = new_demux_packet(p->frame_size * p->read_frames);
+    if (!dp) {
+        MP_ERR(demuxer, "Can't read packet 32.\n");
+        return 1;
+    }
+
+    dp->pos = stream_tell(demuxer->stream);
+    dp->pts = (dp->pos  / p->frame_size) / p->frame_rate;
+
+    int len = stream_read(demuxer->stream, dp->buffer, dp->len);
+
+    MP_INFO(demuxer, "Readed stream raw_fill_buffer - %d.\n", len);
+
     demux_packet_shorten(dp, len);
     demux_add_packet(p->sh, dp);
 
@@ -335,6 +463,15 @@ const demuxer_desc_t demuxer_desc_rawvideo = {
     .desc = "Uncompressed video",
     .open = demux_rawvideo_open,
     .fill_buffer = raw_fill_buffer,
+    .seek = raw_seek,
+    .control = raw_control,
+};
+
+const demuxer_desc_t demuxer_desc_rawvideo32 = {
+    .name = "rawvideo32",
+    .desc = "Uncompressed video 32 bits",
+    .open = demux_rawvideo_open32,
+    .fill_buffer = raw_fill_buffer32,
     .seek = raw_seek,
     .control = raw_control,
 };
