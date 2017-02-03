@@ -315,7 +315,8 @@ SOURCES += \
     waftools/fragments/pthreads.c \
     waftools/fragments/pvr.c \
     waftools/fragments/sse.c \
-    waftools/fragments/wasapi.c
+    waftools/fragments/wasapi.c \
+    video/decode/vd_xuno.c
 
 DISTFILES += \
     video/out/x11_icon.bin \
@@ -617,7 +618,8 @@ HEADERS += \
     video/vdpau.h \
     video/vdpau_mixer.h \
     waftools/fragments/cocoa.m \
-    mpv_talloc.h
+    mpv_talloc.h \
+    video/decode/xuno.h
 
 
      devtools=/home/lex/develop-tools

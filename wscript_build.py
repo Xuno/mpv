@@ -312,6 +312,7 @@ def build(ctx):
         ( "video/decode/hw_vdpau.c",             "vdpau-hwaccel" ),
         ( "video/decode/hw_videotoolbox.c",      "videotoolbox-hwaccel" ),
         ( "video/decode/vd_lavc.c" ),
+        ( "video/decode/vd_xuno.c" ),
         ( "video/filter/refqueue.c" ),
         ( "video/filter/vf.c" ),
         ( "video/filter/vf_buffer.c" ),

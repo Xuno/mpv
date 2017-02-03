@@ -52,7 +52,7 @@
 #include <libavutil/mastering_display_metadata.h>
 #endif
 
-#include "lavc.h"
+#include "xuno.h"
 
 #if AVPALETTE_SIZE != MP_PALETTE_SIZE
 #error palette too large, adapt video/mp_image.h:MP_PALETTE_SIZE
@@ -61,16 +61,16 @@
 #include "options/m_option.h"
 
 static void init_avctx(struct dec_video *vd, const char *decoder,
-                       struct vd_lavc_hwdec *hwdec);
+                       struct vd_xuno_hwdec *hwdec);
 static void uninit_avctx(struct dec_video *vd);
 
 static int get_buffer2_hwdec(AVCodecContext *avctx, AVFrame *pic, int flags);
 static enum AVPixelFormat get_format_hwdec(struct AVCodecContext *avctx,
                                            const enum AVPixelFormat *pix_fmt);
 
-#define OPT_BASE_STRUCT struct vd_lavc_params
+#define OPT_BASE_STRUCT struct vd_xuno_params
 
-struct vd_lavc_params {
+struct vd_xuno_params {
     int fast;
     int show_all;
     int skip_loop_filter;
@@ -97,7 +97,7 @@ static const struct m_opt_choice_alternatives discard_names[] = {
     OPT_GENERAL(int, name, field, flags, .type = CONF_TYPE_CHOICE, \
                 .priv = (void *)discard_names)
 
-const struct m_sub_options vd_lavc_conf = {
+const struct m_sub_options vd_xuno_conf = {
     .opts = (const m_option_t[]){
         OPT_FLAG("fast", fast, 0),
         OPT_FLAG("show-all", show_all, 0),
@@ -113,8 +113,8 @@ const struct m_sub_options vd_lavc_conf = {
         OPT_KEYVALUELIST("o", avopts, 0),
         {0}
     },
-    .size = sizeof(struct vd_lavc_params),
-    .defaults = &(const struct vd_lavc_params){
+    .size = sizeof(struct vd_xuno_params),
+    .defaults = &(const struct vd_xuno_params){
         .show_all = 0,
         .check_hw_profile = 1,
         .software_fallback = 3,
@@ -125,97 +125,97 @@ const struct m_sub_options vd_lavc_conf = {
     },
 };
 
-extern const struct vd_lavc_hwdec mp_vd_lavc_vdpau;
-extern const struct vd_lavc_hwdec mp_vd_lavc_vdpau_copy;
-extern const struct vd_lavc_hwdec mp_vd_lavc_videotoolbox;
-extern const struct vd_lavc_hwdec mp_vd_lavc_videotoolbox_copy;
-extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi;
-extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi_copy;
-extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2;
-extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2_copy;
-extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va;
-extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy;
-extern const struct vd_lavc_hwdec mp_vd_lavc_cuda;
+extern const struct vd_xuno_hwdec mp_vd_xuno_vdpau;
+extern const struct vd_xuno_hwdec mp_vd_xuno_vdpau_copy;
+extern const struct vd_xuno_hwdec mp_vd_xuno_videotoolbox;
+extern const struct vd_xuno_hwdec mp_vd_xuno_videotoolbox_copy;
+//extern const struct vd_xuno_hwdec mp_vd_xuno_vaapi;
+//extern const struct vd_xuno_hwdec mp_vd_xuno_vaapi_copy;
+extern const struct vd_xuno_hwdec mp_vd_xuno_dxva2;
+extern const struct vd_xuno_hwdec mp_vd_xuno_dxva2_copy;
+extern const struct vd_xuno_hwdec mp_vd_xuno_d3d11va;
+extern const struct vd_xuno_hwdec mp_vd_xuno_d3d11va_copy;
+//extern const struct vd_xuno_hwdec mp_vd_xuno_cuda;
 
 #if HAVE_RPI
-static const struct vd_lavc_hwdec mp_vd_lavc_rpi = {
+static const struct vd_xuno_hwdec mp_vd_xuno_rpi = {
     .type = HWDEC_RPI,
-    .lavc_suffix = "_mmal",
+    .xuno_suffix = "_mmal",
     .image_format = IMGFMT_MMAL,
 };
-static const struct vd_lavc_hwdec mp_vd_lavc_rpi_copy = {
+static const struct vd_xuno_hwdec mp_vd_xuno_rpi_copy = {
     .type = HWDEC_RPI_COPY,
-    .lavc_suffix = "_mmal",
+    .xuno_suffix = "_mmal",
     .copying = true,
 };
 #endif
 
 #if HAVE_ANDROID
-static const struct vd_lavc_hwdec mp_vd_lavc_mediacodec = {
+static const struct vd_xuno_hwdec mp_vd_xuno_mediacodec = {
     .type = HWDEC_MEDIACODEC,
-    .lavc_suffix = "_mediacodec",
+    .xuno_suffix = "_mediacodec",
     .copying = true,
 };
 #endif
 
-#if HAVE_CUDA_HWACCEL
-static const struct vd_lavc_hwdec mp_vd_lavc_cuda_copy = {
+#if HAVE_CUDA_HWACCEL && 0
+static const struct vd_xuno_hwdec mp_vd_xuno_cuda_copy = {
     .type = HWDEC_CUDA_COPY,
-    .lavc_suffix = "_cuvid",
+    .xuno_suffix = "_cuvid",
     .copying = true,
 };
 #endif
 
-static const struct vd_lavc_hwdec mp_vd_lavc_crystalhd = {
+static const struct vd_xuno_hwdec mp_vd_xuno_crystalhd = {
     .type = HWDEC_CRYSTALHD,
-    .lavc_suffix = "_crystalhd",
+    .xuno_suffix = "_crystalhd",
     .copying = true,
 };
 
-static const struct vd_lavc_hwdec *const hwdec_list[] = {
+static const struct vd_xuno_hwdec *const hwdec_xuno_list[] = {
 #if HAVE_RPI
-    &mp_vd_lavc_rpi,
-    &mp_vd_lavc_rpi_copy,
+    &mp_vd_xuno_rpi,
+    &mp_vd_xuno_rpi_copy,
 #endif
 #if HAVE_VDPAU_HWACCEL
-    &mp_vd_lavc_vdpau,
-    &mp_vd_lavc_vdpau_copy,
+    &mp_vd_xuno_vdpau,
+    &mp_vd_xuno_vdpau_copy,
 #endif
 #if HAVE_VIDEOTOOLBOX_HWACCEL
-    &mp_vd_lavc_videotoolbox,
-    &mp_vd_lavc_videotoolbox_copy,
+    &mp_vd_xuno_videotoolbox,
+    &mp_vd_xuno_videotoolbox_copy,
 #endif
-#if HAVE_VAAPI_HWACCEL
-    &mp_vd_lavc_vaapi,
-    &mp_vd_lavc_vaapi_copy,
+#if HAVE_VAAPI_HWACCEL & 0
+    &mp_vd_xuno_vaapi,
+    &mp_vd_xuno_vaapi_copy,
 #endif
 #if HAVE_D3D_HWACCEL
-    &mp_vd_lavc_d3d11va,
-    &mp_vd_lavc_dxva2,
-    &mp_vd_lavc_dxva2_copy,
-    &mp_vd_lavc_d3d11va_copy,
+    &mp_vd_xuno_d3d11va,
+    &mp_vd_xuno_dxva2,
+    &mp_vd_xuno_dxva2_copy,
+    &mp_vd_xuno_d3d11va_copy,
 #endif
 #if HAVE_ANDROID
-    &mp_vd_lavc_mediacodec,
+    &mp_vd_xuno_mediacodec,
 #endif
-#if HAVE_CUDA_HWACCEL
-    &mp_vd_lavc_cuda,
-    &mp_vd_lavc_cuda_copy,
+#if HAVE_CUDA_HWACCEL & 0
+    &mp_vd_xuno_cuda,
+    &mp_vd_xuno_cuda_copy,
 #endif
-    &mp_vd_lavc_crystalhd,
+    &mp_vd_xuno_crystalhd,
     NULL
 };
 
-static struct vd_lavc_hwdec *find_hwcodec(enum hwdec_type api)
+static struct vd_xuno_hwdec *find_hwcodec_xuno(enum hwdec_type api)
 {
-    for (int n = 0; hwdec_list[n]; n++) {
-        if (hwdec_list[n]->type == api)
-            return (struct vd_lavc_hwdec *)hwdec_list[n];
+    for (int n = 0; hwdec_xuno_list[n]; n++) {
+        if (hwdec_xuno_list[n]->type == api)
+            return (struct vd_xuno_hwdec *)hwdec_xuno_list[n];
     }
     return NULL;
 }
 
-static bool hwdec_codec_allowed(struct dec_video *vd, const char *codec)
+static bool hwdec_xuno_codec_allowed(struct dec_video *vd, const char *codec)
 {
     bstr s = bstr0(vd->opts->hwdec_codecs);
     while (s.len) {
@@ -227,12 +227,12 @@ static bool hwdec_codec_allowed(struct dec_video *vd, const char *codec)
     return false;
 }
 
-static void hwdec_lock(struct lavc_ctx *ctx)
+static void hwdec_xuno_lock(struct xuno_ctx *ctx)
 {
     if (ctx->hwdec && ctx->hwdec->lock)
         ctx->hwdec->lock(ctx);
 }
-static void hwdec_unlock(struct lavc_ctx *ctx)
+static void hwdec_xuno_unlock(struct xuno_ctx *ctx)
 {
     if (ctx->hwdec && ctx->hwdec->unlock)
         ctx->hwdec->unlock(ctx);
@@ -240,11 +240,11 @@ static void hwdec_unlock(struct lavc_ctx *ctx)
 
 // Find the correct profile entry for the current codec and profile.
 // Assumes the table has higher profiles first (for each codec).
-const struct hwdec_profile_entry *hwdec_find_profile(
-    struct lavc_ctx *ctx, const struct hwdec_profile_entry *table)
+const struct hwdec_xuno_profile_entry *hwdec_xuno_find_profile(
+    struct xuno_ctx *ctx, const struct hwdec_xuno_profile_entry *table)
 {
     assert(AV_CODEC_ID_NONE == 0);
-    struct vd_lavc_params *lavc_param = ctx->opts->vd_lavc_params;
+    struct vd_xuno_params *xuno_param = ctx->opts->vd_xuno_params;
     enum AVCodecID codec = ctx->avctx->codec_id;
     int profile = ctx->avctx->profile;
     // Assume nobody cares about these aspects of the profile
@@ -255,7 +255,7 @@ const struct hwdec_profile_entry *hwdec_find_profile(
     for (int n = 0; table[n].av_codec; n++) {
         if (table[n].av_codec == codec) {
             if (table[n].ff_profile == profile ||
-                !lavc_param->check_hw_profile)
+                !xuno_param->check_hw_profile)
                 return &table[n];
         }
     }
@@ -263,8 +263,8 @@ const struct hwdec_profile_entry *hwdec_find_profile(
 }
 
 // Check codec support, without checking the profile.
-bool hwdec_check_codec_support(const char *codec,
-                               const struct hwdec_profile_entry *table)
+bool hwdec_xuno_check_codec_support(const char *codec,
+                               const struct hwdec_xuno_profile_entry *table)
 {
     enum AVCodecID codecid = mp_codec_to_av_codec_id(codec);
     for (int n = 0; table[n].av_codec; n++) {
@@ -274,7 +274,7 @@ bool hwdec_check_codec_support(const char *codec,
     return false;
 }
 
-int hwdec_get_max_refs(struct lavc_ctx *ctx)
+int hwdec_xuno_get_max_refs(struct xuno_ctx *ctx)
 {
     switch (ctx->avctx->codec_id) {
     case AV_CODEC_ID_H264:
@@ -290,10 +290,10 @@ int hwdec_get_max_refs(struct lavc_ctx *ctx)
 // Decoder wrappers are usually added to libavcodec with a specific suffix.
 // For example the mmal h264 decoder is named h264_mmal.
 // This API would e.g. return h264_mmal for
-// hwdec_find_decoder("h264", "_mmal").
+// hwdec_xuno_find_decoder("h264", "_mmal").
 // Just concatenating the two names will not always work due to inconsistencies
 // (e.g. "mpeg2video" vs. "mpeg2").
-const char *hwdec_find_decoder(const char *codec, const char *suffix)
+const char *hwdec_xuno_find_decoder(const char *codec, const char *suffix)
 {
     enum AVCodecID codec_id = mp_codec_to_av_codec_id(codec);
     if (codec_id == AV_CODEC_ID_NONE)
@@ -310,17 +310,17 @@ const char *hwdec_find_decoder(const char *codec, const char *suffix)
     return NULL;
 }
 
-// Parallel to hwdec_find_decoder(): return whether a hwdec can use the given
+// Parallel to hwdec_xuno_find_decoder(): return whether a hwdec can use the given
 // decoder. This can't be answered accurately; it works for wrapper decoders
 // only (like mmal), and for real hwaccels this will always return false.
-static bool hwdec_is_wrapper(struct vd_lavc_hwdec *hwdec, const char *decoder)
+static bool hwdec_xuno_is_wrapper(struct vd_xuno_hwdec *hwdec, const char *decoder)
 {
-    if (!hwdec->lavc_suffix)
+    if (!hwdec->xuno_suffix)
         return false;
-    return bstr_endswith0(bstr0(decoder), hwdec->lavc_suffix);
+    return bstr_endswith0(bstr0(decoder), hwdec->xuno_suffix);
 }
 
-static int hwdec_probe(struct dec_video *vd, struct vd_lavc_hwdec *hwdec,
+static int hwdec_xuno_probe(struct dec_video *vd, struct vd_xuno_hwdec *hwdec,
                        const char *codec)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
@@ -328,24 +328,24 @@ static int hwdec_probe(struct dec_video *vd, struct vd_lavc_hwdec *hwdec,
     if (hwdec->probe)
         r = hwdec->probe(ctx, hwdec, codec);
     if (r >= 0) {
-        if (hwdec->lavc_suffix && !hwdec_find_decoder(codec, hwdec->lavc_suffix))
-            return HWDEC_ERR_NO_CODEC;
+        if (hwdec->xuno_suffix && !hwdec_xuno_find_decoder(codec, hwdec->xuno_suffix))
+            return hwdec_xuno_ERR_NO_CODEC;
     }
     return r;
 }
 
-static struct vd_lavc_hwdec *probe_hwdec(struct dec_video *vd, bool autoprobe,
+static struct vd_xuno_hwdec *probe_hwdec(struct dec_video *vd, bool autoprobe,
                                          enum hwdec_type api,
                                          const char *codec)
 {
     MP_VERBOSE(vd, "Probing '%s'...\n", m_opt_choice_str(mp_hwdec_names, api));
-    struct vd_lavc_hwdec *hwdec = find_hwcodec(api);
+    struct vd_xuno_hwdec *hwdec = find_hwcodec_xuno(api);
     if (!hwdec) {
         MP_VERBOSE(vd, "Requested hardware decoder not compiled.\n");
         return NULL;
     }
-    int r = hwdec_probe(vd, hwdec, codec);
-    if (r == HWDEC_ERR_EMULATED) {
+    int r = hwdec_xuno_probe(vd, hwdec, codec);
+    if (r == hwdec_xuno_ERR_EMULATED) {
         if (autoprobe)
             return NULL;
         // User requested this explicitly.
@@ -354,10 +354,10 @@ static struct vd_lavc_hwdec *probe_hwdec(struct dec_video *vd, bool autoprobe,
     }
     if (r >= 0) {
         return hwdec;
-    } else if (r == HWDEC_ERR_NO_CODEC) {
+    } else if (r == hwdec_xuno_ERR_NO_CODEC) {
         MP_VERBOSE(vd, "Hardware decoder for '%s' with the given API not found "
                        "in libavcodec.\n", codec);
-    } else if (r == HWDEC_ERR_NO_CTX && !autoprobe) {
+    } else if (r == hwdec_xuno_ERR_NO_CTX && !autoprobe) {
         MP_WARN(vd, "VO does not support requested hardware decoder, or "
                 "loading it failed.\n");
     }
@@ -375,7 +375,7 @@ static void force_fallback(struct dec_video *vd)
     vd_ffmpeg_ctx *ctx = vd->priv;
 
     uninit_avctx(vd);
-    int lev = ctx->hwdec_notified ? MSGL_WARN : MSGL_V;
+    int lev = ctx->hwdec_xuno_notified ? MSGL_WARN : MSGL_V;
     mp_msg(vd->log, lev, "Falling back to software decoding.\n");
     init_avctx(vd, ctx->decoder, NULL);
 }
@@ -388,9 +388,9 @@ static void reinit(struct dec_video *vd)
 
     uninit_avctx(vd);
 
-    struct vd_lavc_hwdec *hwdec = NULL;
+    struct vd_xuno_hwdec *hwdec = NULL;
 
-    if (hwdec_codec_allowed(vd, codec)) {
+    if (hwdec_xuno_codec_allowed(vd, codec)) {
         int api = vd->opts->hwdec_api;
         if (HWDEC_IS_AUTO(api)) {
             // If a specific decoder is forced, we should try a hwdec method
@@ -402,15 +402,15 @@ static void reinit(struct dec_video *vd)
             // On the other hand, e.g. "--hwdec=rpi" should always force the
             // wrapper decoder, so be careful not to break this case.
             bool might_be_wrapper = false;
-            for (int n = 0; hwdec_list[n]; n++) {
-                struct vd_lavc_hwdec *other = (void *)hwdec_list[n];
-                if (hwdec_is_wrapper(other, decoder))
+            for (int n = 0; hwdec_xuno_list[n]; n++) {
+                struct vd_xuno_hwdec *other = (void *)hwdec_xuno_list[n];
+                if (hwdec_xuno_is_wrapper(other, decoder))
                     might_be_wrapper = true;
             }
-            for (int n = 0; hwdec_list[n]; n++) {
-                hwdec = probe_hwdec(vd, true, hwdec_list[n]->type, codec);
+            for (int n = 0; hwdec_xuno_list[n]; n++) {
+                hwdec = probe_hwdec(vd, true, hwdec_xuno_list[n]->type, codec);
                 if (hwdec) {
-                    if (might_be_wrapper && !hwdec_is_wrapper(hwdec, decoder)) {
+                    if (might_be_wrapper && !hwdec_xuno_is_wrapper(hwdec, decoder)) {
                         MP_VERBOSE(vd, "This hwaccel is not compatible.\n");
                         continue;
                     }
@@ -434,8 +434,8 @@ static void reinit(struct dec_video *vd)
         const char *orig_decoder = decoder;
         if (hwdec->get_codec)
             decoder = hwdec->get_codec(ctx, decoder);
-        if (hwdec->lavc_suffix)
-            decoder = hwdec_find_decoder(codec, hwdec->lavc_suffix);
+        if (hwdec->xuno_suffix)
+            decoder = hwdec_xuno_find_decoder(codec, hwdec->xuno_suffix);
         MP_VERBOSE(vd, "Trying hardware decoding.\n");
         if (strcmp(orig_decoder, decoder) != 0)
             MP_VERBOSE(vd, "Using underlying hw-decoder '%s'\n", decoder);
@@ -455,8 +455,8 @@ static int init(struct dec_video *vd, const char *decoder)
     ctx->log = vd->log;
     ctx->opts = vd->opts;
     ctx->decoder = talloc_strdup(ctx, decoder);
-    ctx->hwdec_devs = vd->hwdec_devs;
-    ctx->hwdec_swpool = talloc_steal(ctx, mp_image_pool_new(17));
+    ctx->hwdec_xuno_devs = vd->hwdec_devs;
+    ctx->hwdec_xuno_swpool = talloc_steal(ctx, mp_image_pool_new(17));
 
     reinit(vd);
 
@@ -468,10 +468,10 @@ static int init(struct dec_video *vd, const char *decoder)
 }
 
 static void init_avctx(struct dec_video *vd, const char *decoder,
-                       struct vd_lavc_hwdec *hwdec)
+                       struct vd_xuno_hwdec *hwdec)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
-    struct vd_lavc_params *lavc_param = vd->opts->vd_lavc_params;
+    struct vd_xuno_params *xuno_param = vd->opts->vd_xuno_params;
     struct mp_codec_params *c = vd->codec;
 
     assert(!ctx->avctx);
@@ -479,8 +479,8 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     if (strcmp(decoder, "mp-rawvideo") == 0)
         decoder = "rawvideo";
 
-    AVCodec *lavc_codec = avcodec_find_decoder_by_name(decoder);
-    if (!lavc_codec)
+    AVCodec *xuno_codec = avcodec_find_decoder_by_name(decoder);
+    if (!xuno_codec)
         return;
 
     ctx->codec_timebase = mp_get_codec_timebase(vd->codec);
@@ -491,14 +491,14 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
 
     ctx->pix_fmt = AV_PIX_FMT_NONE;
     ctx->hwdec = hwdec;
-    ctx->hwdec_fmt = 0;
-    ctx->avctx = avcodec_alloc_context3(lavc_codec);
+    ctx->hwdec_xuno_fmt = 0;
+    ctx->avctx = avcodec_alloc_context3(xuno_codec);
     AVCodecContext *avctx = ctx->avctx;
     if (!ctx->avctx)
         goto error;
     avctx->opaque = vd;
     avctx->codec_type = AVMEDIA_TYPE_VIDEO;
-    avctx->codec_id = lavc_codec->id;
+    avctx->codec_id = xuno_codec->id;
 
 #if LIBAVCODEC_VERSION_MICRO >= 100
     avctx->pkt_timebase = ctx->codec_timebase;
@@ -519,20 +519,20 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
         ctx->max_delay_queue = ctx->hwdec->delay_queue;
         ctx->hw_probing = true;
     } else {
-        mp_set_avcodec_threads(vd->log, avctx, lavc_param->threads);
+        mp_set_avcodec_threads(vd->log, avctx, xuno_param->threads);
     }
 
-    avctx->flags |= lavc_param->bitexact ? AV_CODEC_FLAG_BITEXACT : 0;
-    avctx->flags2 |= lavc_param->fast ? AV_CODEC_FLAG2_FAST : 0;
+    avctx->flags |= xuno_param->bitexact ? AV_CODEC_FLAG_BITEXACT : 0;
+    avctx->flags2 |= xuno_param->fast ? AV_CODEC_FLAG2_FAST : 0;
 
-    if (lavc_param->show_all)
+    if (xuno_param->show_all)
         avctx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
 
-    avctx->skip_loop_filter = lavc_param->skip_loop_filter;
-    avctx->skip_idct = lavc_param->skip_idct;
-    avctx->skip_frame = lavc_param->skip_frame;
+    avctx->skip_loop_filter = xuno_param->skip_loop_filter;
+    avctx->skip_idct = xuno_param->skip_idct;
+    avctx->skip_frame = xuno_param->skip_frame;
 
-    mp_set_avopts(vd->log, avctx, lavc_param->avopts);
+    mp_set_avopts(vd->log, avctx, xuno_param->avopts);
 
     // Do this after the above avopt handling in case it changes values
     ctx->skip_frame = avctx->skip_frame;
@@ -544,7 +544,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
 
     /* open it */
     MP_ERR(vd, "111Could not open codec.\n");
-    if (avcodec_open2(avctx, lavc_codec, NULL) < 0)
+    if (avcodec_open2(avctx, xuno_codec, NULL) < 0)
         goto error;
 
     return;
@@ -599,12 +599,12 @@ static void uninit_avctx(struct dec_video *vd)
     if (ctx->hwdec && ctx->hwdec->uninit)
         ctx->hwdec->uninit(ctx);
     ctx->hwdec = NULL;
-    assert(ctx->hwdec_priv == NULL);
+    assert(ctx->hwdec_xuno_priv == NULL);
 
     av_freep(&ctx->avctx);
 
-    ctx->hwdec_failed = false;
-    ctx->hwdec_fail_count = 0;
+    ctx->hwdec_xuno_failed = false;
+    ctx->hwdec_xuno_fail_count = 0;
     ctx->max_delay_queue = 0;
     ctx->hw_probing = false;
 }
@@ -645,12 +645,12 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
 //  av_sw_format: AV_PIX_FMT_ for the underlying hardware frame format
 //  initial_pool_size: number of frames in the memory pool on creation
 // Return >=0 on success, <0 on error.
-int hwdec_setup_hw_frames_ctx(struct lavc_ctx *ctx, AVBufferRef *device_ctx,
+int hwdec_xuno_setup_hw_frames_ctx(struct xuno_ctx *ctx, AVBufferRef *device_ctx,
                               int av_sw_format, int initial_pool_size)
 {
     int w = ctx->avctx->coded_width;
     int h = ctx->avctx->coded_height;
-    int av_hw_format = imgfmt2pixfmt(ctx->hwdec_fmt);
+    int av_hw_format = imgfmt2pixfmt(ctx->hwdec_xuno_fmt);
 
     if (ctx->cached_hw_frames_ctx) {
         AVHWFramesContext *fctx = (void *)ctx->cached_hw_frames_ctx->data;
@@ -676,9 +676,9 @@ int hwdec_setup_hw_frames_ctx(struct lavc_ctx *ctx, AVBufferRef *device_ctx,
 
         fctx->initial_pool_size = initial_pool_size;
 
-        hwdec_lock(ctx);
+        hwdec_xuno_lock(ctx);
         int res = av_hwframe_ctx_init(ctx->cached_hw_frames_ctx);
-        hwdec_unlock(ctx);
+        hwdec_xuno_unlock(ctx);
 
         if (res > 0) {
             MP_ERR(ctx, "Failed to allocate hw frames.\n");
@@ -709,29 +709,29 @@ static enum AVPixelFormat get_format_hwdec(struct AVCodecContext *avctx,
 
     assert(ctx->hwdec);
 
-    ctx->hwdec_request_reinit |= ctx->hwdec_failed;
-    ctx->hwdec_failed = false;
+    ctx->hwdec_xuno_request_reinit |= ctx->hwdec_xuno_failed;
+    ctx->hwdec_xuno_failed = false;
 
     for (int i = 0; fmt[i] != AV_PIX_FMT_NONE; i++) {
         if (ctx->hwdec->image_format == pixfmt2imgfmt(fmt[i])) {
             // There could be more reasons for a change, and it's possible
             // that we miss some. (Might also depend on the hwaccel type.)
             bool change =
-                ctx->hwdec_w != avctx->coded_width ||
-                ctx->hwdec_h != avctx->coded_height ||
-                ctx->hwdec_fmt != ctx->hwdec->image_format ||
-                ctx->hwdec_profile != avctx->profile ||
-                ctx->hwdec_request_reinit ||
+                ctx->hwdec_xuno_w != avctx->coded_width ||
+                ctx->hwdec_xuno_h != avctx->coded_height ||
+                ctx->hwdec_xuno_fmt != ctx->hwdec->image_format ||
+                ctx->hwdec_xuno_profile != avctx->profile ||
+                ctx->hwdec_xuno_request_reinit ||
                 ctx->hwdec->volatile_context;
-            ctx->hwdec_w = avctx->coded_width;
-            ctx->hwdec_h = avctx->coded_height;
-            ctx->hwdec_fmt = ctx->hwdec->image_format;
-            ctx->hwdec_profile = avctx->profile;
-            ctx->hwdec_request_reinit = false;
+            ctx->hwdec_xuno_w = avctx->coded_width;
+            ctx->hwdec_xuno_h = avctx->coded_height;
+            ctx->hwdec_xuno_fmt = ctx->hwdec->image_format;
+            ctx->hwdec_xuno_profile = avctx->profile;
+            ctx->hwdec_xuno_request_reinit = false;
             if (change && ctx->hwdec->init_decoder) {
-                if (ctx->hwdec->init_decoder(ctx, ctx->hwdec_w, ctx->hwdec_h) < 0)
+                if (ctx->hwdec->init_decoder(ctx, ctx->hwdec_xuno_w, ctx->hwdec_xuno_h) < 0)
                 {
-                    ctx->hwdec_fmt = 0;
+                    ctx->hwdec_xuno_fmt = 0;
                     break;
                 }
             }
@@ -739,7 +739,7 @@ static enum AVPixelFormat get_format_hwdec(struct AVCodecContext *avctx,
         }
     }
 
-    ctx->hwdec_failed = true;
+    ctx->hwdec_xuno_failed = true;
     for (int i = 0; fmt[i] != AV_PIX_FMT_NONE; i++) {
         const AVPixFmtDescriptor *d = av_pix_fmt_desc_get(fmt[i]);
         if (d && !(d->flags & AV_PIX_FMT_FLAG_HWACCEL))
@@ -754,14 +754,14 @@ static int get_buffer2_hwdec(AVCodecContext *avctx, AVFrame *pic, int flags)
     vd_ffmpeg_ctx *ctx = vd->priv;
 
     int imgfmt = pixfmt2imgfmt(pic->format);
-    if (!ctx->hwdec || ctx->hwdec_fmt != imgfmt)
-        ctx->hwdec_failed = true;
+    if (!ctx->hwdec || ctx->hwdec_xuno_fmt != imgfmt)
+        ctx->hwdec_xuno_failed = true;
 
     /* Hardware decoding failed, and we will trigger a proper fallback later
      * when returning from the decode call. (We are forcing complete
      * reinitialization later to reset the thread count properly.)
      */
-    if (ctx->hwdec_failed)
+    if (ctx->hwdec_xuno_failed)
         return avcodec_default_get_buffer2(avctx, pic, flags);
 
     // We expect it to use the exact size used to create the hw decoder in
@@ -770,7 +770,7 @@ static int get_buffer2_hwdec(AVCodecContext *avctx, AVFrame *pic, int flags)
     int w = pic->width;
     int h = pic->height;
 
-    if (imgfmt != ctx->hwdec_fmt && w != ctx->hwdec_w && h != ctx->hwdec_h)
+    if (imgfmt != ctx->hwdec_xuno_fmt && w != ctx->hwdec_xuno_w && h != ctx->hwdec_xuno_h)
         return AVERROR(EINVAL);
 
     struct mp_image *mpi = ctx->hwdec->allocate_image(ctx, w, h);
@@ -791,9 +791,9 @@ static bool prepare_decoding(struct dec_video *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
     AVCodecContext *avctx = ctx->avctx;
-    struct vd_lavc_params *opts = ctx->opts->vd_lavc_params;
+    struct vd_xuno_params *opts = ctx->opts->vd_xuno_params;
 
-    if (!avctx || ctx->hwdec_failed)
+    if (!avctx || ctx->hwdec_xuno_failed)
         return false;
 
     int drop = ctx->framedrop_flags;
@@ -805,7 +805,7 @@ static bool prepare_decoding(struct dec_video *vd)
         avctx->skip_frame = ctx->skip_frame;
     }
 
-    if (ctx->hwdec_request_reinit)
+    if (ctx->hwdec_xuno_request_reinit)
         reset_avctx(vd);
 
     return true;
@@ -814,16 +814,16 @@ static bool prepare_decoding(struct dec_video *vd)
 static void handle_err(struct dec_video *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
-    struct vd_lavc_params *opts = ctx->opts->vd_lavc_params;
+    struct vd_xuno_params *opts = ctx->opts->vd_xuno_params;
 
     MP_WARN(vd, "Error while decoding frame!\n");
 
     if (ctx->hwdec) {
-        ctx->hwdec_fail_count += 1;
+        ctx->hwdec_xuno_fail_count += 1;
         // The FFmpeg VT hwaccel is buggy and can crash after 1 broken frame.
         bool vt = ctx->hwdec && ctx->hwdec->type == HWDEC_VIDEOTOOLBOX;
-        if (ctx->hwdec_fail_count >= opts->software_fallback || vt)
-            ctx->hwdec_failed = true;
+        if (ctx->hwdec_xuno_fail_count >= opts->software_fallback || vt)
+            ctx->hwdec_xuno_failed = true;
     }
 }
 
@@ -838,9 +838,9 @@ static bool do_send_packet(struct dec_video *vd, struct demux_packet *pkt)
     AVPacket avpkt;
     mp_set_av_packet(&avpkt, pkt, &ctx->codec_timebase);
 
-    hwdec_lock(ctx);
+    hwdec_xuno_lock(ctx);
     int ret = avcodec_send_packet(avctx, pkt ? &avpkt : NULL);
-    hwdec_unlock(ctx);
+    hwdec_xuno_unlock(ctx);
 
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
         return false;
@@ -879,9 +879,9 @@ static bool decode_frame(struct dec_video *vd)
     if (!prepare_decoding(vd))
         return true;
 
-    hwdec_lock(ctx);
+    hwdec_xuno_lock(ctx);
     int ret = avcodec_receive_frame(avctx, ctx->pic);
-    hwdec_unlock(ctx);
+    hwdec_xuno_unlock(ctx);
 
     if (ret == AVERROR_EOF) {
         // If flushing was initialized earlier and has ended now, make it start
@@ -895,7 +895,7 @@ static bool decode_frame(struct dec_video *vd)
     if (!ctx->pic->buf[0])
         return true;
 
-    ctx->hwdec_fail_count = 0;
+    ctx->hwdec_xuno_fail_count = 0;
 
     AVFrameSideData *sd = NULL;
     sd = av_frame_get_side_data(ctx->pic, AV_FRAME_DATA_A53_CC);
@@ -936,7 +936,7 @@ static bool receive_frame(struct dec_video *vd, struct mp_image **out_image)
 
     bool progress = decode_frame(vd);
 
-    if (ctx->hwdec_failed) {
+    if (ctx->hwdec_xuno_failed) {
         // Failed hardware decoding? Try again in software.
         struct demux_packet **pkts = ctx->sent_packets;
         int num_pkts = ctx->num_sent_packets;
@@ -967,25 +967,25 @@ static bool receive_frame(struct dec_video *vd, struct mp_image **out_image)
 
     if (ctx->hwdec && ctx->hwdec->copying && (res->fmt.flags & MP_IMGFLAG_HWACCEL))
     {
-        struct mp_image *sw = mp_image_hw_download(res, ctx->hwdec_swpool);
+        struct mp_image *sw = mp_image_hw_download(res, ctx->hwdec_xuno_swpool);
         mp_image_unrefp(&res);
         res = sw;
         if (!res) {
             MP_ERR(vd, "Could not copy back hardware decoded frame.\n");
-            ctx->hwdec_fail_count = INT_MAX - 1; // force fallback
+            ctx->hwdec_xuno_fail_count = INT_MAX - 1; // force fallback
             handle_err(vd);
             return NULL;
         }
     }
 
-    if (!ctx->hwdec_notified && vd->opts->hwdec_api != HWDEC_NONE) {
+    if (!ctx->hwdec_xuno_notified && vd->opts->hwdec_api != HWDEC_NONE) {
         if (ctx->hwdec) {
             MP_INFO(vd, "Using hardware decoding (%s).\n",
                     m_opt_choice_str(mp_hwdec_names, ctx->hwdec->type));
         } else {
             MP_VERBOSE(vd, "Using software decoding.\n");
         }
-        ctx->hwdec_notified = true;
+        ctx->hwdec_xuno_notified = true;
     }
 
     if (ctx->hw_probing) {
@@ -1037,13 +1037,13 @@ static int control(struct dec_video *vd, int cmd, void *arg)
 
 static void add_decoders(struct mp_decoder_list *list)
 {
-    mp_add_lavc_decoders(list, AVMEDIA_TYPE_VIDEO);
-    mp_add_decoder(list, "lavc", "mp-rawvideo", "mp-rawvideo",
-                   "raw video");
+    mp_add_xuno_decoders(list, AVMEDIA_TYPE_VIDEO);
+    mp_add_decoder(list, "xuno", "mp-rawvideo32", "mp-rawvideo32",
+                   "raw video 32");
 }
 
-const struct vd_functions mpcodecs_vd_ffmpeg = {
-    .name = "lavc",
+const struct vd_functions mpcodecs_vd_xuno = {
+    .name = "xuno",
     .add_decoders = add_decoders,
     .init = init,
     .uninit = uninit,

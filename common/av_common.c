@@ -240,6 +240,20 @@ void mp_add_lavc_decoders(struct mp_decoder_list *list, enum AVMediaType type)
     }
 }
 
+void mp_add_xuno_decoders(struct mp_decoder_list *list, enum AVMediaType type)
+{
+    AVCodec *cur = NULL;
+    for (;;) {
+        cur = av_codec_next(cur);
+        if (!cur)
+            break;
+        if (av_codec_is_decoder(cur) && cur->type == type && !is_crap(cur)) {
+            mp_add_decoder(list, "xuno", mp_codec_from_av_codec_id(cur->id),
+                           cur->name, cur->long_name);
+        }
+    }
+}
+
 // (Abuses the decoder list data structures.)
 void mp_add_lavc_encoders(struct mp_decoder_list *list)
 {
